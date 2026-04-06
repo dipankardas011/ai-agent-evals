@@ -1,0 +1,37 @@
+#!/bin/bash
+
+create() {
+    echo "Creating infrastructure..."
+    docker network inspect aws_vpc >/dev/null 2>&1 || docker network create --subnet=192.168.100.0/24 aws_vpc
+    docker build -f Dockerfile -t ami-ubuntu-corp .
+    docker image inspect ami-ubuntu-corp >/dev/null 2>&1 || echo "Docker image 'ami-ubuntu-corp' not found. Please build the image first."
+    docker ps -a --format '{{.Names}}' | grep -w ec2-instance-1 >/dev/null 2>&1 || 
+    docker run -d --name ec2-instance-1 --net aws_vpc --ip 192.168.100.5 ami-ubuntu-corp
+    echo "Infrastructure created successfully."
+    echo "Output: EC2 instance created with IP: 192.168.100.5. can be accessed via ssh root@192.168.100.5 given the password is '1234'"
+}
+
+destroy() {
+    echo "Destroying infrastructure..."
+    docker rm -f ec2-instance-1 >/dev/null 2>&1 || echo "EC2 instance not found."
+    docker network rm aws_vpc >/dev/null 2>&1 || echo "VPC network not found."
+    echo "Infrastructure destroyed successfully."
+}
+
+main() {
+    case "$1" in
+        "create")
+            create
+            ;;
+        "destroy")
+            destroy
+            ;;
+        *)
+            echo "Usage: $0 {create|destroy}"
+            exit 1
+            ;;
+    esac
+}
+
+
+main $@
