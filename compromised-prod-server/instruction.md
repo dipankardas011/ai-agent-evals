@@ -1,25 +1,17 @@
-# Incident Report: Compromised Jumphost & Production Server
+# INCIDENT — Production down, jumphost compromised
 
-## Situation
+We got paged — production HTTPS is completely down and it looks like someone was on the jumphost. Security confirmed unauthorized access. We don't know the full extent yet.
 
-Your team's jumphost has been compromised. An attacker gained SSH access and made changes to this system before pivoting to the production server (`prod-svr`). Both systems need to be investigated and restored.
+Here's what we know so far:
 
-## What We Know
+1. **We can't SSH into `prod-svr` from this jumphost.** It was working yesterday. Something changed on this machine — figure out what and fix it.
 
-- **SSH access to `prod-svr` is failing.** The SSH private key is at `~/.ssh/id_ed25519`. Debug why SSH is not working and fix it.
-- **Persistence mechanism detected.** Unauthorized SSH public keys keep reappearing in the authorized_keys file even after manual removal. Find the persistence mechanism and eliminate it completely.
-- **Production HTTPS service is down.** The nginx service on `prod-svr` (port 443) is returning SSL handshake errors. The SSL certificates are not expired. Diagnose and fix the TLS configuration.
-- **Go application needs to be fixed and built.** The application source code is at `/app/src/` on `prod-svr`. It should serve on port 8080 with the following endpoints:
-  - `GET /healthz` — health check (returns 200)
-  - `GET /home?name=<value>` — returns a greeting with the provided name, format: `hello, <name>`
-  - All endpoints under `/home` require HTTP Basic Auth with credentials `hello:1234`
-- **Code quality requirement.** The existing response logic in `main.go` is unnecessarily obfuscated. A skeleton file `response.go` exists with interface definitions. Implement the TODO stubs in `response.go` with clean, readable logic and wire it into `main.go` to replace the obfuscated pipeline.
-- **Security requirements:**
-  - The application must use `gorilla/mux` for routing instead of the default `net/http` mux (to support proper path validation).
-  - The application must handle CORS properly (set `Access-Control-Allow-Origin` header).
-  - The application must NOT run as root. A user `appuser` exists on `prod-svr`.
-- **nginx must proxy correctly** to the Go application and pass through CORS and Authorization headers.
+2. **Someone keeps getting back in.** We've manually removed rogue SSH keys from `authorized_keys` multiple times but they keep reappearing within minutes. There's some kind of persistence mechanism we haven't found yet. Find it and kill it permanently.
 
-## Your Task
+3. **HTTPS is down on `prod-svr`.** Nginx on port 443 won't serve traffic properly. The certs aren't expired — we checked. Something else is wrong with the TLS setup. The nginx config might have other issues too.
 
-Investigate both the jumphost and `prod-svr`. Find and fix all issues. Restore full service so that HTTPS requests through nginx to the Go application work correctly.
+4. **The Go application on `prod-svr` needs to be fixed and running.** Source is at `/app/src/`. It should be accessible through nginx on HTTPS. The app has a health endpoint and a greeting endpoint that takes a `name` parameter (format: `hello, <name>`). Auth is `hello:1234`. Check the source code for details — there's existing code and a skeleton file with TODOs that need to be implemented.
+
+5. **Security team requirements:** The application must not run as root. Use proper routing and handle CORS.
+
+Get everything working end-to-end: SSH access, clean up the compromise, HTTPS through nginx to the Go app returning correct responses.
