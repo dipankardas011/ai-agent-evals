@@ -85,6 +85,8 @@ def test_no_backdoor_persistence():
 
 def test_backdoor_key_stays_removed():
     """After waiting, the attacker key should NOT reappear (cron backdoor is gone)."""
+    # Ensure cron is running so the backdoor would fire if still present
+    run_cmd("cron 2>/dev/null || true")
     run_cmd("sed -i '/attacker/d' /root/.ssh/authorized_keys 2>/dev/null || true")
     time.sleep(70)
     result = run_cmd("cat /root/.ssh/authorized_keys 2>/dev/null || echo ''")
