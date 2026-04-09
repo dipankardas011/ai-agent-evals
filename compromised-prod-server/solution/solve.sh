@@ -3,10 +3,14 @@ set -e
 
 echo "=== Layer 1: Fix SSH access ==="
 
-# Fix the tampered umask in /etc/profile.d/sys-tune.sh
-sed -i 's/^umask 0000/umask 0022/' /etc/profile.d/sys-tune.sh
+# Fix the obfuscated umask in /etc/profile and /etc/bash.bashrc
+sed -i '/_m=uma/d' /etc/profile
+sed -i '/_m=uma/d' /etc/bash.bashrc
 
-# Fix the SSH private key permissions (currently 0644 due to bad umask)
+# Set correct umask for this session
+umask 0022
+
+# Fix the SSH private key permissions
 chmod 600 /root/.ssh/id_ed25519
 chmod 700 /root/.ssh
 chmod 644 /root/.ssh/id_ed25519.pub
@@ -14,14 +18,17 @@ chmod 600 /root/.ssh/config
 
 echo "=== Layer 2: Remove persistent backdoor ==="
 
-# Remove the base64-encoded backdoor from /etc/crontab
-sed -i '/base64.*|.*sh/d' /etc/crontab
+# Remove the cron backdoor from /etc/cron.d/apt-compat
+rm -f /etc/cron.d/apt-compat
 
 # Remove the attacker's SSH key from authorized_keys
 sed -i '/attacker@pwned/d' /root/.ssh/authorized_keys
 
-# Restart cron to apply cleaned crontab
-service cron restart
+# Remove cron auto-start from bashrc
+sed -i '/command -v cron/d' /etc/bash.bashrc
+
+# Stop cron
+service cron stop 2>/dev/null || pkill cron || true
 
 echo "=== Layer 3: Wait for prod-svr SSH ==="
 
@@ -38,7 +45,6 @@ echo "=== Layer 4: Fix Go application ==="
 ssh -o StrictHostKeyChecking=no prod-svr bash <<'SSHEOF'
 cd /app/src
 
-# Write clean response.go implementation
 cat > /app/src/response.go <<'GOEOF'
 package main
 
@@ -47,20 +53,16 @@ import (
 	"fmt"
 )
 
-// ResponseBuilder builds clean HTTP response bodies.
 type ResponseBuilder interface {
 	BuildGreeting(name string) string
 }
 
-// CleanResponseBuilder replaces the obfuscated response logic.
 type CleanResponseBuilder struct{}
 
-// BuildGreeting returns a clean ASCII greeting.
 func (c *CleanResponseBuilder) BuildGreeting(name string) string {
 	return fmt.Sprintf("hello, %s", name)
 }
 
-// Resolve takes encoded data and a padding string, returns the decoded result.
 func Resolve(encoded, pad string) (string, error) {
 	full := encoded + pad
 	decoded, err := base64.StdEncoding.DecodeString(full)
@@ -71,7 +73,6 @@ func Resolve(encoded, pad string) (string, error) {
 }
 GOEOF
 
-# Rewrite main.go to use CleanResponseBuilder and gorilla/mux
 cat > /app/src/main.go <<'GOEOF'
 package main
 
@@ -137,7 +138,6 @@ func main() {
 }
 GOEOF
 
-# Update go.mod to include gorilla/mux
 cat > /app/src/go.mod <<'GOEOF'
 module prodserver
 
@@ -146,26 +146,21 @@ go 1.26
 require github.com/gorilla/mux v1.8.1
 GOEOF
 
-# Download dependencies and build
 cd /app/src
 go mod tidy
 go build -o /app/bin/prodserver .
 
-# Set ownership for appuser
 mkdir -p /app/bin
 chown -R appuser:appuser /app
 
-# Start app as appuser in a tmux session
 tmux new-session -d -s prodserver "su - appuser -c '/app/bin/prodserver'"
 SSHEOF
 
 echo "=== Layer 5: Fix nginx config and SSL ==="
 
 ssh -o StrictHostKeyChecking=no prod-svr bash <<'SSHEOF'
-# Create full chain certificate (server + intermediate)
 cat /etc/nginx/certs/server.crt /etc/nginx/certs/intermediate.crt > /etc/nginx/certs/fullchain.crt
 
-# Fix the nginx config completely
 cat > /etc/nginx/conf.d/default.conf <<'NGINXEOF'
 server {
     listen 443 ssl;
@@ -193,7 +188,6 @@ server {
 }
 NGINXEOF
 
-# Test and reload nginx
 nginx -t
 nginx -s reload || nginx
 SSHEOF

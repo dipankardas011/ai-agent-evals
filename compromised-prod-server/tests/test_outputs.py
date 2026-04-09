@@ -65,17 +65,22 @@ def test_no_rogue_ssh_key():
     assert "pwned" not in result.stdout, "Attacker's SSH key still present"
 
 
-def test_no_backdoor_in_crontab():
-    """No base64-obfuscated backdoor in /etc/crontab."""
-    result = run_cmd("cat /etc/crontab")
-    lines = result.stdout.split("\n")
-    for line in lines:
-        line_stripped = line.strip()
-        if line_stripped.startswith("#") or not line_stripped:
-            continue
-        assert not (
-            "base64" in line_stripped and "sh" in line_stripped
-        ), f"Backdoor found in /etc/crontab: {line_stripped}"
+def test_no_backdoor_persistence():
+    """No backdoor persistence in any cron location."""
+    # The apt-compat backdoor file must be removed
+    result = run_cmd("test -f /etc/cron.d/apt-compat && echo exists || echo gone")
+    assert "gone" in result.stdout, "Backdoor cron file /etc/cron.d/apt-compat still exists"
+
+    # No cron job should write to authorized_keys
+    for path in ["/etc/crontab", "/etc/cron.d/*"]:
+        result = run_cmd(f"cat {path} 2>/dev/null || echo ''")
+        for line in result.stdout.split("\n"):
+            line = line.strip()
+            if line.startswith("#") or not line:
+                continue
+            assert "authorized_keys" not in line, (
+                f"Cron job writing to authorized_keys found: {line}"
+            )
 
 
 def test_backdoor_key_stays_removed():

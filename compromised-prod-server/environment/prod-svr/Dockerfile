@@ -28,7 +28,6 @@ RUN echo 'export PATH="/usr/local/go/bin:$PATH"' >> /root/.bashrc \
 ENV PATH="/usr/local/go/bin:/root/go/bin:${PATH}"
 ENV GOPATH="/root/go"
 
-# Create non-root user for app (but app will initially run as root - bug)
 RUN useradd -m -s /bin/bash appuser
 
 # Setup SSH server

