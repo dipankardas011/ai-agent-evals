@@ -35,9 +35,8 @@ RUN mkdir -p /run/sshd && \
     sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
     sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
-# Copy SSL certificates
+# Copy SSL certificates (intermediate CA is NOT included — must be obtained separately)
 COPY certs/ca.crt /etc/nginx/certs/ca.crt
-COPY certs/intermediate.crt /etc/nginx/certs/intermediate.crt
 COPY certs/server.crt /etc/nginx/certs/server.crt
 COPY certs/server.key /etc/nginx/certs/server.key
 

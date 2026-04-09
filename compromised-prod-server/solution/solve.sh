@@ -158,6 +158,10 @@ SSHEOF
 
 echo "=== Layer 5: Fix nginx config and SSL ==="
 
+# Copy the intermediate cert from jumphost to prod-svr
+# (discovered via AIA extension in server cert: file:///usr/local/share/ca-certificates/intermediate-ca.crt)
+scp -o StrictHostKeyChecking=no /usr/local/share/ca-certificates/intermediate-ca.crt prod-svr:/etc/nginx/certs/intermediate.crt
+
 ssh -o StrictHostKeyChecking=no prod-svr bash <<'SSHEOF'
 cat /etc/nginx/certs/server.crt /etc/nginx/certs/intermediate.crt > /etc/nginx/certs/fullchain.crt
 

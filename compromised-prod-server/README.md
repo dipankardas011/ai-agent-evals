@@ -35,7 +35,7 @@ The challenge is layered: each fix unlocks access to the next problem. SSH must 
 | Backdoor | jumphost `/etc/cron.d/apt-compat` | Cron job that re-injects attacker SSH key every minute via base64-encoded payload |
 | Backdoor | jumphost `/etc/bash.bashrc` | Auto-starts cron daemon on shell login |
 | Backdoor | jumphost `~/.ssh/authorized_keys` | Contains `attacker@pwned` key |
-| TLS/nginx | prod-svr nginx config | Uses `server.crt` only — missing intermediate CA in chain |
+| TLS/nginx | prod-svr `/etc/nginx/certs/` | Intermediate cert not present on prod-svr — agent must discover AIA extension in server cert (`openssl x509 -noout -text`), find intermediate at `file:///usr/local/share/ca-certificates/intermediate-ca.crt` on jumphost, copy to prod-svr, and build fullchain |
 | TLS/nginx | prod-svr nginx config | `proxy_pass` points to port `9090` (app listens on `8080`) |
 | TLS/nginx | prod-svr nginx config | Missing semicolon after `proxy_set_header X-Real-IP` in `/home` block |
 | TLS/nginx | prod-svr nginx config | Suspicious `/admin` location block |
