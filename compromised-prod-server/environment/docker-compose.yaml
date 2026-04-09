@@ -1,0 +1,25 @@
+services:
+  main:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      prod-svr:
+        condition: service_started
+    networks:
+      - internal
+
+  prod-svr:
+    build:
+      context: ./prod-svr
+      dockerfile: Dockerfile
+    networks:
+      - internal
+    expose:
+      - "22"
+      - "443"
+      - "8080"
+
+networks:
+  internal:
+    driver: bridge

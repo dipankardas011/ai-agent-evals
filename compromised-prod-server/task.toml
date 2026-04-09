@@ -1,0 +1,40 @@
+schema_version = "1.1"
+
+[task]
+name = "dipankardas/compromised-prod-server"
+description = "Incident response: compromised jumphost with persistent backdoor, broken SSH, damaged nginx TLS, and obfuscated Go application on production server"
+authors = [{ name = "Dipankar Das", email = "dipankar@dipankar-das.com" }]
+keywords = ["devsecops", "incident-response", "ssh", "nginx", "tls", "backdoor", "crontab", "golang", "security"]
+
+[metadata]
+author_name = "Dipankar Das"
+author_email = "dipankar@dipankar-das.com"
+difficulty = "hard"
+category = "devsecops"
+tags = ["ssh", "nginx", "tls", "cron", "go", "security", "incident-response", "docker"]
+expert_time_estimate_min = 120.0
+junior_time_estimate_min = 480.0
+
+[environment.runtime]
+python = "3.12"
+
+[verifier]
+timeout_sec = 180.0
+
+[agent]
+timeout_sec = 1800.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]
