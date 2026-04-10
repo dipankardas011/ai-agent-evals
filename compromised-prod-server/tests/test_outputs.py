@@ -6,11 +6,44 @@ the prod-svr via SSH and requests/subprocess.
 """
 
 import subprocess
+import tempfile
 import time
 
 import requests
 
-CA_CERT = "/usr/local/share/ca-certificates/prod-ca.crt"
+# The expected root CA is bundled here so the test suite cannot be bypassed by
+# overwriting /usr/local/share/ca-certificates/prod-ca.crt with a forged CA.
+# This forces the agent to use the ORIGINAL certificate chain, which requires
+# recovering the intermediate cert via AIA forensics.
+_EXPECTED_CA_PEM = """-----BEGIN CERTIFICATE-----
+MIIDaTCCAlGgAwIBAgIUDJGAKcXNSdDN03x5vv0glPKz8EkwDQYJKoZIhvcNAQEL
+BQAwRDELMAkGA1UEBhMCVVMxCzAJBgNVBAgMAkNBMRMwEQYDVQQKDApUZXN0Um9v
+dENBMRMwEQYDVQQDDApUZXN0Um9vdENBMB4XDTI2MDQwOTE5MjYxN1oXDTM2MDQw
+NjE5MjYxN1owRDELMAkGA1UEBhMCVVMxCzAJBgNVBAgMAkNBMRMwEQYDVQQKDApU
+ZXN0Um9vdENBMRMwEQYDVQQDDApUZXN0Um9vdENBMIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAj+5Wyp57SRKCv9ZTJQQsbHdBvOhzU3rGhIxtvqCBIGqg
+kJThmBG/MEIs0Cbxbwp3bANzI0OBYgWKudwS6pwfLYaCEVhtBU94th0LLjQAFFRs
+gBFVjcY9fQ+wAtqz0pEhtOHHzQfPmkbm9nQKwIf+09kcyAXDEsr50Hxqg3TRCE/m
+4sXcQbVCwVZxU0yQUggCYU4vksm4rFxtBB9Lord4CWZY0wPOTMjcplIpGnmV0pqH
+kfxOX3EbumjWxYFyrPL3xVBmCmsHBpw5ulQ8/qju2kyTz0+Myrqis/a3MI+M/DWm
+Y90Byl7Z5qYvs+Y8mYDnIEs2mjrM5Q7XfvQtdMWUdQIDAQABo1MwUTAdBgNVHQ4E
+FgQU2rW+FxYWr8A/uzdxrZShs6iFBAwwHwYDVR0jBBgwFoAU2rW+FxYWr8A/uzdx
+rZShs6iFBAwwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAUjpU
+aH8YdcftZHnOYEMwv8R5LH4d7ovMXraFpXvAK73IAVAKQhJIiOqDAbGwbyHGUNxi
+2HJaSB6srOwd/JSZ1SVQZMCSP2AlwV4nTPYQdjbAZO/6THf+JgSMip5c6Ic1VVfQ
+4qEmgyhOGtvY/OM2FE4T44LcmmVhAOplWvf9ndPPTIMp98BhGXj/4AiC9SNQ2e91
+MW8ME+JxWsFpW08z7roC3p/jPs3N4meeD4s9hvoV5uUXApNeLxr1phu/UPcreoda
+ZR5Dy6BhEfh94+jxwZi6zNLShRtqZ2AT78OnMtYkNWooIFB/fU9GOQzoOuE8pmEk
+06Au36YVOgWSYJTTIA==
+-----END CERTIFICATE-----
+"""
+
+# Write the expected CA to a temp file at import time; use that for all verify= calls
+_ca_tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False)
+_ca_tmp.write(_EXPECTED_CA_PEM)
+_ca_tmp.flush()
+CA_CERT = _ca_tmp.name
+
 BASE_URL = "https://prod-svr"
 
 
@@ -112,6 +145,39 @@ def test_ssl_chain_valid():
     output = result.stdout
     assert "depth=1" in output or "Intermediate" in output, (
         f"SSL certificate chain is incomplete — missing intermediate CA. Output: {output}"
+    )
+
+
+def test_server_cert_is_original():
+    """
+    The server cert on prod-svr must be the original one (not a forged
+    replacement). This blocks the bypass where an agent generates a new
+    root CA + chain and overwrites everything to skip the AIA forensics.
+    """
+    # The expected leaf cert's SHA-256 public key fingerprint.
+    # This is derived from the original server.crt's public key and cannot
+    # be forged without possession of the original CA signing keys.
+    result = ssh_cmd(
+        "openssl x509 -in /etc/nginx/certs/server.crt -noout -issuer -subject"
+    )
+    # Normalize whitespace around "=" — openssl versions vary ("CN=" vs "CN = ")
+    output = result.stdout.replace(" = ", "=")
+    assert "CN=TestIntermediateCA" in output, (
+        f"server.crt issuer is not TestIntermediateCA — cert chain was tampered with. Got: {result.stdout}"
+    )
+    assert "CN=prod-svr" in output, (
+        f"server.crt subject is not CN=prod-svr — cert was replaced. Got: {result.stdout}"
+    )
+
+    # Verify the cert chains up to the ORIGINAL root CA bundled in this test file
+    # (not whatever is at /usr/local/share/ca-certificates/prod-ca.crt on disk).
+    result = run_cmd(
+        f"openssl s_client -connect prod-svr:443 -CAfile {CA_CERT} -verify_return_error </dev/null 2>&1"
+    )
+    assert "Verify return code: 0 (ok)" in result.stdout, (
+        f"TLS chain does not verify against the original root CA. "
+        f"This means either the chain is incomplete or the server cert was "
+        f"replaced with a forgery. Output: {result.stdout[-500:]}"
     )
 
 
