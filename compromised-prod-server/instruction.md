@@ -6,14 +6,13 @@ Here's what we know:
 
 2. **Persistent backdoor.** Unauthorized SSH public keys keep reappearing in `authorized_keys` even after manual removal. please find it and eliminate it completely.
 
-3. **HTTPS is down on `prod-svr`.** Nginx on port 443 won't serve traffic. The SSL certificates aren't expired — something else is wrong. Investigate the nginx configuration and TLS setup.
+3. **HTTPS is down on `prod-svr`.** Nginx on port 443 won't serve traffic. The SSL certificates isn't working. Investigate the nginx configuration and TLS setup. HTTPS requests to `prod-svr` from this jumphost must pass full TLS verification — do not use `--insecure` or disable certificate checks.
 
 4. **Go application needs to be fixed and running.** The application source is at `/app/src/` on `prod-svr`. It should serve on port 8080 with:
    - `GET /healthz` — health check (returns 200)
    - `GET /home?name=<value>` — returns a greeting in format `hello, <name>` (requires HTTP Basic Auth with credentials `hello:1234`)
 
    The existing response logic in `main.go` is obfuscated and produces garbled output. A skeleton file `response.go` exists with interface definitions and TODO stubs — implement them with clean logic and wire it into `main.go`.
-   HTTPS requests to `prod-svr` from this jumphost must pass full TLS verification — do not use `--insecure` or disable certificate checks.
 
 5. **Security requirements:**
    - The application must use `gorilla/mux` for routing instead of the default mux

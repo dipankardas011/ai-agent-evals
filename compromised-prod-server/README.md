@@ -11,7 +11,7 @@ The challenge is layered: each fix unlocks access to the next problem. SSH must 
 - **Incident response & forensics:** Identifying attacker-planted modifications in shell startup files, cron jobs, and SSH configurations
 - **SSH debugging:** Diagnosing permission issues and authentication failures
 - **Persistence mechanism detection:** Finding obfuscated cron-based backdoors that use base64-encoded payloads
-- **TLS/SSL configuration:** Building proper certificate chains with intermediate CAs, fixing nginx config syntax
+- **X.509 certificate forensics:** Inspecting cert extensions (AIA), tracing certificate chains across machines, building fullchain bundles, fixing nginx TLS config
 - **Nginx reverse proxy setup:** Correct proxy_pass configuration, header forwarding, port matching
 - **Go development:** Reading obfuscated code, implementing interfaces, adding dependencies (`gorilla/mux`), building and running binaries
 - **Linux security:** Running services as non-root users, CORS configuration
@@ -35,9 +35,10 @@ The challenge is layered: each fix unlocks access to the next problem. SSH must 
 | Backdoor | jumphost `/etc/cron.d/apt-compat` | Cron job that re-injects attacker SSH key every minute via base64-encoded payload |
 | Backdoor | jumphost `/etc/bash.bashrc` | Auto-starts cron daemon on shell login |
 | Backdoor | jumphost `~/.ssh/authorized_keys` | Contains `attacker@pwned` key |
-| TLS/nginx | prod-svr `/etc/nginx/certs/` | Intermediate cert not present on prod-svr — agent must discover AIA extension in server cert (`openssl x509 -noout -text`), find intermediate at `file:///usr/local/share/ca-certificates/intermediate-ca.crt` on jumphost, copy to prod-svr, and build fullchain |
+| TLS/nginx | prod-svr `/etc/nginx/certs/` | Intermediate cert is **missing** from prod-svr — must be recovered via AIA forensics (see TLS Forensics Flow below) |
+| TLS/nginx | prod-svr nginx config | `ssl_certificate` points at `server.crt` alone — must be a fullchain bundle |
 | TLS/nginx | prod-svr nginx config | `proxy_pass` points to port `9090` (app listens on `8080`) |
-| TLS/nginx | prod-svr nginx config | Missing semicolon after `proxy_set_header X-Real-IP` in `/home` block |
+| TLS/nginx | prod-svr nginx config | Missing semicolon after `proxy_set_header X-Real-IP` in `/home` block (nginx silently fails to start) |
 | TLS/nginx | prod-svr nginx config | Suspicious `/admin` location block |
 | Go app | prod-svr `/app/src/main.go` | `assemblePayload()` is obfuscated — hex decode → base64 round-trip → byte substitution that corrupts output |
 | Go app | prod-svr `/app/src/main.go` | Uses `net/http` default mux instead of `gorilla/mux` |
@@ -45,6 +46,48 @@ The challenge is layered: each fix unlocks access to the next problem. SSH must 
 | Go app | prod-svr `/app/src/response.go` | `BuildGreeting` and `Resolve` are unimplemented (panic stubs) |
 | Go app | prod-svr `/app/src/go.mod` | Missing `gorilla/mux` dependency |
 | Security | prod-svr | App must run as `appuser`, not root |
+
+### TLS Forensics Flow (intended solution path)
+
+The TLS layer is deliberately designed as an X.509 forensics puzzle. Simply concatenating files in `/etc/nginx/certs/` on prod-svr won't work — the intermediate cert isn't there. The agent must:
+
+1. **Observe HTTPS is broken** — either nginx won't start (syntax error) or the SSL handshake fails (after fixing syntax). `curl https://prod-svr/healthz` fails with a verification error.
+
+2. **Inspect the server cert:**
+   ```
+   openssl x509 -in /etc/nginx/certs/server.crt -noout -text
+   ```
+   The `Issuer` is `TestIntermediateCA` but only `ca.crt` (TestRootCA) is present in the certs directory. The chain is incomplete.
+
+3. **Find the AIA extension in the server cert:**
+   ```
+   X509v3 Authority Information Access:
+       CA Issuers - URI:file:///usr/local/share/ca-certificates/intermediate-ca.crt
+   ```
+   This is the breadcrumb. The Authority Information Access extension tells verifiers where to fetch the issuer's certificate.
+
+4. **Check the path on prod-svr** — it's empty. `ls /usr/local/share/ca-certificates/` shows nothing. The file the AIA points to doesn't exist on prod-svr.
+
+5. **Reason laterally** — the only other machine the agent has access to is the jumphost. Check there:
+   ```
+   ls /usr/local/share/ca-certificates/
+   # prod-ca.crt
+   # intermediate-ca.crt   ← found it
+   ```
+
+6. **Copy the intermediate cert over** (via `scp` from jumphost, or paste the PEM contents over SSH):
+   ```
+   scp /usr/local/share/ca-certificates/intermediate-ca.crt prod-svr:/etc/nginx/certs/intermediate.crt
+   ```
+
+7. **Build the fullchain bundle:**
+   ```
+   cat server.crt intermediate.crt > fullchain.crt
+   ```
+
+8. **Update nginx config** to use `fullchain.crt` instead of `server.crt`, and reload.
+
+This layer tests whether the agent can read X.509 extensions (not just run `openssl verify`), interpret AIA URIs, and reason across machine boundaries. A naive agent that just tries to rebuild the chain locally on prod-svr will fail.
 
 ## Verification
 
