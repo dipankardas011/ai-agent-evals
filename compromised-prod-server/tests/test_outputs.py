@@ -92,10 +92,26 @@ def test_ssh_key_permissions():
 
 
 def test_no_rogue_ssh_key():
-    """No attacker SSH key in authorized_keys on main."""
+    """Attacker key removed AND legitimate operator key preserved on jumphost."""
     result = run_cmd("cat /root/.ssh/authorized_keys 2>/dev/null || echo ''")
     assert "attacker" not in result.stdout, "Attacker's SSH key still present"
     assert "pwned" not in result.stdout, "Attacker's SSH key still present"
+    # The legit operator entry must survive cleanup — don't just truncate the file
+    assert "operator@ops" in result.stdout, (
+        "Legitimate operator key was removed — cleanup wiped too much. "
+        "Only the attacker line should be deleted."
+    )
+
+
+def test_prod_svr_authorized_keys_intact():
+    """prod-svr's authorized_keys must still contain the legit jumphost key."""
+    result = ssh_cmd("cat /root/.ssh/authorized_keys")
+    assert result.returncode == 0, f"Could not read prod-svr authorized_keys: {result.stderr}"
+    assert "jumphost@main" in result.stdout, (
+        "Legit jumphost key missing from prod-svr authorized_keys — "
+        "cleanup should never touch prod-svr's key file."
+    )
+    assert "attacker" not in result.stdout, "Attacker key found on prod-svr"
 
 
 def test_no_backdoor_persistence():
