@@ -14,10 +14,16 @@ Here's what we know:
 
    The existing response logic in `main.go` is obfuscated and produces garbled output. A skeleton file `response.go` exists with interface definitions and TODO stubs — implement them with clean logic and wire it into `main.go`.
 
-5. **Security requirements:**
-   - The application must use `gorilla/mux` for routing instead of the default mux
-   - The application must handle CORS properly
+5. **Security requirements for the Go application:**
+   - Use `gorilla/mux` for routing instead of the default mux
+   - Handle CORS properly (`Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers`) and respond to OPTIONS preflight requests
+   - Set standard HTTP security headers on responses: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security`
+   - Validate and sanitize the `name` query parameter:
+     - Enforce a reasonable length limit (reject overly long inputs with 400)
+     - Reject null bytes and other dangerous characters
+     - HTML-escape the value before including it in the response (XSS prevention)
+   - Restrict HTTP methods: only `GET` (and `OPTIONS` for CORS preflight) should be allowed on `/home`; other methods must return 405
    - The application must NOT run as root — a user `appuser` exists on `prod-svr`
-   - Nginx must proxy correctly to the Go application and pass through authorization headers
+   - Nginx must proxy correctly to the Go application and pass through authorization headers and the application's security/CORS headers
 
 Get everything working end-to-end: SSH access from jumphost to prod-svr, clean up the compromise, HTTPS through nginx to the Go app returning correct responses.

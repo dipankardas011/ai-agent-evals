@@ -256,7 +256,175 @@ def test_cors_headers():
     )
 
 
-# === Layer 4b: Code Quality (Go unit tests) ===
+def test_cors_preflight_options():
+    """OPTIONS preflight request must return 200 with CORS headers."""
+    resp = requests.options(
+        f"{BASE_URL}/home",
+        verify=CA_CERT,
+    )
+    assert resp.status_code == 200, f"OPTIONS preflight returned {resp.status_code}"
+    assert "Access-Control-Allow-Methods" in resp.headers, (
+        f"Missing Access-Control-Allow-Methods on preflight. Headers: {dict(resp.headers)}"
+    )
+
+
+# === Layer 4b: Application Security ===
+
+
+def test_security_header_nosniff():
+    """Response must include X-Content-Type-Options: nosniff."""
+    resp = requests.get(
+        f"{BASE_URL}/home",
+        params={"name": "test"},
+        auth=("hello", "1234"),
+        verify=CA_CERT,
+    )
+    assert resp.headers.get("X-Content-Type-Options", "").lower() == "nosniff", (
+        f"Missing or wrong X-Content-Type-Options header. "
+        f"Got: {resp.headers.get('X-Content-Type-Options')}"
+    )
+
+
+def test_security_header_frame_options():
+    """Response must include X-Frame-Options to prevent clickjacking."""
+    resp = requests.get(
+        f"{BASE_URL}/home",
+        params={"name": "test"},
+        auth=("hello", "1234"),
+        verify=CA_CERT,
+    )
+    frame_opts = resp.headers.get("X-Frame-Options", "").upper()
+    assert frame_opts in ("DENY", "SAMEORIGIN"), (
+        f"X-Frame-Options must be DENY or SAMEORIGIN, got: {frame_opts}"
+    )
+
+
+def test_security_header_hsts():
+    """Response must include Strict-Transport-Security header (HSTS)."""
+    resp = requests.get(
+        f"{BASE_URL}/home",
+        params={"name": "test"},
+        auth=("hello", "1234"),
+        verify=CA_CERT,
+    )
+    hsts = resp.headers.get("Strict-Transport-Security", "")
+    assert "max-age=" in hsts, (
+        f"Missing or invalid Strict-Transport-Security header. Got: {hsts}"
+    )
+
+
+def test_input_length_limit():
+    """Overly long name parameter must be rejected by the handler (DoS protection).
+
+    Use a length > 100 (the handler's limit) but small enough to fit within
+    nginx/HTTP URL limits, so we're testing the application-layer check
+    rather than the web server's URL length enforcement.
+    """
+    long_name = "a" * 500
+    resp = requests.get(
+        f"{BASE_URL}/home",
+        params={"name": long_name},
+        auth=("hello", "1234"),
+        verify=CA_CERT,
+    )
+    assert resp.status_code == 400, (
+        f"Long name should return 400, got {resp.status_code}. "
+        f"The handler must enforce an input length limit."
+    )
+
+
+def test_input_xss_escaped():
+    """Name containing HTML/script tags must be escaped in response (XSS prevention)."""
+    resp = requests.get(
+        f"{BASE_URL}/home",
+        params={"name": "<script>alert(1)</script>"},
+        auth=("hello", "1234"),
+        verify=CA_CERT,
+    )
+    assert resp.status_code == 200, f"Got {resp.status_code}, expected 200"
+    # Raw <script> tag must NOT appear in the response body
+    assert "<script>" not in resp.text, (
+        f"Unescaped <script> tag found in response — XSS vulnerability. "
+        f"Response: {resp.text}"
+    )
+    # The escaped form should appear
+    assert "&lt;script&gt;" in resp.text or "&lt;" in resp.text, (
+        f"HTML was not escaped properly. Response: {resp.text}"
+    )
+
+
+def test_input_null_byte_rejected():
+    """Name containing null bytes must be rejected."""
+    # Use raw URL to avoid requests auto-encoding
+    import urllib.parse
+    name = urllib.parse.quote("hello\x00world")
+    resp = requests.get(
+        f"{BASE_URL}/home?name={name}",
+        auth=("hello", "1234"),
+        verify=CA_CERT,
+    )
+    assert resp.status_code == 400, (
+        f"Null byte in name should return 400, got {resp.status_code}"
+    )
+
+
+def test_method_not_allowed_post():
+    """POST to /home must return 405 Method Not Allowed."""
+    resp = requests.post(
+        f"{BASE_URL}/home",
+        params={"name": "test"},
+        auth=("hello", "1234"),
+        verify=CA_CERT,
+    )
+    assert resp.status_code == 405, (
+        f"POST /home should return 405, got {resp.status_code}"
+    )
+
+
+def test_method_not_allowed_delete():
+    """DELETE to /home must return 405 Method Not Allowed."""
+    resp = requests.delete(
+        f"{BASE_URL}/home",
+        auth=("hello", "1234"),
+        verify=CA_CERT,
+    )
+    assert resp.status_code == 405, (
+        f"DELETE /home should return 405, got {resp.status_code}"
+    )
+
+
+def test_path_traversal_blocked():
+    """Path traversal attempts must not leak or crash the server."""
+    # Attempt to traverse out of /home
+    resp = requests.get(
+        f"{BASE_URL}/home/../etc/passwd",
+        auth=("hello", "1234"),
+        verify=CA_CERT,
+    )
+    # Should be either 404 (route not found) or 400 (bad request)
+    # and must NOT contain root:x: (contents of /etc/passwd)
+    assert resp.status_code in (400, 404), (
+        f"Path traversal should return 400/404, got {resp.status_code}"
+    )
+    assert "root:x:" not in resp.text, (
+        f"Path traversal leaked /etc/passwd contents: {resp.text}"
+    )
+
+
+def test_wrong_basic_auth_rejected():
+    """Wrong basic auth credentials must return 401."""
+    resp = requests.get(
+        f"{BASE_URL}/home",
+        params={"name": "test"},
+        auth=("wrong", "creds"),
+        verify=CA_CERT,
+    )
+    assert resp.status_code == 401, (
+        f"Wrong auth should return 401, got {resp.status_code}"
+    )
+
+
+# === Layer 4c: Code Quality (Go unit tests) ===
 
 RESPONSE_TEST_GO = r'''package main
 
@@ -310,14 +478,39 @@ func TestResolveError(t *testing.T) {
 HANDLER_TEST_GO = r'''package main
 
 import (
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/gorilla/mux"
 )
 
-func TestHealthzHandler(t *testing.T) {
-	req := httptest.NewRequest("GET", "/healthz", nil)
+// buildRouter constructs the same router as main() so tests exercise
+// the full middleware chain (security headers, CORS, routing, handlers).
+func buildRouter() *mux.Router {
+	r := mux.NewRouter()
+	r.StrictSlash(true)
+	r.HandleFunc("/healthz", handleHealth).Methods("GET")
+	r.HandleFunc("/home", handleHome).Methods("GET", "OPTIONS")
+	r.Use(securityHeadersMiddleware)
+	r.Use(corsMiddleware)
+	return r
+}
+
+func doRequest(t *testing.T, method, url string, auth bool) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, url, nil)
+	if auth {
+		req.SetBasicAuth("hello", "1234")
+	}
 	w := httptest.NewRecorder()
-	handleHealth(w, req)
+	buildRouter().ServeHTTP(w, req)
+	return w
+}
+
+func TestHealthzHandler(t *testing.T) {
+	w := doRequest(t, "GET", "/healthz", false)
 	if w.Code != 200 {
 		t.Errorf("healthz returned %d, want 200", w.Code)
 	}
@@ -327,46 +520,80 @@ func TestHealthzHandler(t *testing.T) {
 }
 
 func TestHomeHandlerNoAuth(t *testing.T) {
-	req := httptest.NewRequest("GET", "/home?name=test", nil)
-	w := httptest.NewRecorder()
-	handleHome(w, req)
+	w := doRequest(t, "GET", "/home?name=test", false)
 	if w.Code != 401 {
 		t.Errorf("home without auth returned %d, want 401", w.Code)
 	}
 }
 
 func TestHomeHandlerWithAuth(t *testing.T) {
-	req := httptest.NewRequest("GET", "/home?name=world", nil)
-	req.SetBasicAuth("hello", "1234")
-	w := httptest.NewRecorder()
-	handleHome(w, req)
+	w := doRequest(t, "GET", "/home?name=world", true)
 	if w.Code != 200 {
 		t.Errorf("home with auth returned %d, want 200", w.Code)
 	}
-	body := w.Body.String()
-	if body != "hello, world" {
-		t.Errorf("home body = %q, want %q", body, "hello, world")
-	}
-}
-
-func TestHomeHandlerCORS(t *testing.T) {
-	req := httptest.NewRequest("GET", "/home?name=test", nil)
-	req.SetBasicAuth("hello", "1234")
-	w := httptest.NewRecorder()
-	handleHome(w, req)
-	cors := w.Header().Get("Access-Control-Allow-Origin")
-	if cors == "" {
-		t.Error("missing CORS header Access-Control-Allow-Origin")
+	if w.Body.String() != "hello, world" {
+		t.Errorf("home body = %q, want %q", w.Body.String(), "hello, world")
 	}
 }
 
 func TestHomeHandlerWrongAuth(t *testing.T) {
+	w := doRequest(t, "GET", "/home?name=test", false)
 	req := httptest.NewRequest("GET", "/home?name=test", nil)
 	req.SetBasicAuth("wrong", "creds")
-	w := httptest.NewRecorder()
-	handleHome(w, req)
-	if w.Code != 401 {
-		t.Errorf("home with wrong auth returned %d, want 401", w.Code)
+	w2 := httptest.NewRecorder()
+	buildRouter().ServeHTTP(w2, req)
+	if w2.Code != 401 {
+		t.Errorf("home with wrong auth returned %d, want 401", w2.Code)
+	}
+	_ = w
+}
+
+func TestHomeHandlerCORS(t *testing.T) {
+	w := doRequest(t, "GET", "/home?name=test", true)
+	if w.Header().Get("Access-Control-Allow-Origin") == "" {
+		t.Error("missing CORS header Access-Control-Allow-Origin")
+	}
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	w := doRequest(t, "GET", "/home?name=test", true)
+	if w.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("missing X-Content-Type-Options: nosniff, got %q", w.Header().Get("X-Content-Type-Options"))
+	}
+	if w.Header().Get("X-Frame-Options") == "" {
+		t.Error("missing X-Frame-Options header")
+	}
+	if w.Header().Get("Strict-Transport-Security") == "" {
+		t.Error("missing Strict-Transport-Security header")
+	}
+}
+
+func TestInputLengthLimit(t *testing.T) {
+	longName := strings.Repeat("a", 10000)
+	w := doRequest(t, "GET", "/home?name="+longName, true)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("overlong name returned %d, want 400", w.Code)
+	}
+}
+
+func TestInputXSSEscaped(t *testing.T) {
+	w := doRequest(t, "GET", "/home?name=%3Cscript%3Ealert(1)%3C%2Fscript%3E", true)
+	if w.Code != 200 {
+		t.Errorf("xss name returned %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "<script>") {
+		t.Errorf("unescaped <script> in body: %q", body)
+	}
+	if !strings.Contains(body, "&lt;") {
+		t.Errorf("body not HTML-escaped: %q", body)
+	}
+}
+
+func TestMethodNotAllowed(t *testing.T) {
+	w := doRequest(t, "POST", "/home?name=test", true)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /home returned %d, want 405", w.Code)
 	}
 }
 '''

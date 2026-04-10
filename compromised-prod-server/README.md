@@ -13,8 +13,9 @@ The challenge is layered: each fix unlocks access to the next problem. SSH must 
 - **Persistence mechanism detection:** Finding obfuscated cron-based backdoors that use base64-encoded payloads
 - **X.509 certificate forensics:** Inspecting cert extensions (AIA), tracing certificate chains across machines, building fullchain bundles, fixing nginx TLS config
 - **Nginx reverse proxy setup:** Correct proxy_pass configuration, header forwarding, port matching
-- **Go development:** Reading obfuscated code, implementing interfaces, adding dependencies (`gorilla/mux`), building and running binaries
-- **Linux security:** Running services as non-root users, CORS configuration
+- **Go development:** Reading obfuscated code, implementing interfaces, adding dependencies (`gorilla/mux`), building and running binaries, writing middleware
+- **Application security:** Input validation, XSS prevention (HTML escaping), length limits, null byte rejection, HTTP security headers (X-Content-Type-Options, X-Frame-Options, HSTS), method restrictions, CORS with preflight
+- **Linux security:** Running services as non-root users
 - **Multi-host orchestration:** Working across jumphost and prod-svr via SSH
 
 ## Environment Details
@@ -45,7 +46,10 @@ The challenge is layered: each fix unlocks access to the next problem. SSH must 
 | Go app | prod-svr `/app/src/main.go` | No CORS headers set |
 | Go app | prod-svr `/app/src/response.go` | `BuildGreeting` and `Resolve` are unimplemented (panic stubs) |
 | Go app | prod-svr `/app/src/go.mod` | Missing `gorilla/mux` dependency |
-| Security | prod-svr | App must run as `appuser`, not root |
+| App security | Go handlers | No input validation — agent must add length limit, null-byte rejection, HTML-escape on `name` parameter |
+| App security | Go middleware | No HTTP security headers — agent must set `X-Content-Type-Options`, `X-Frame-Options`, `Strict-Transport-Security` |
+| App security | Go routing | No method restrictions — agent must return 405 for non-GET methods on `/home` |
+| Infra security | prod-svr | App must run as `appuser`, not root |
 
 ### TLS Forensics Flow (intended solution path)
 
@@ -103,11 +107,12 @@ The test suite (`tests/test_outputs.py`) runs 17 tests across 4 layers:
 - No backdoor cron files exist, no cron jobs writing to `authorized_keys`
 - After waiting 70 seconds, attacker key does NOT reappear
 
-**Layer 3 — TLS/SSL (2 tests):**
+**Layer 3 — TLS/SSL (3 tests):**
 - `nginx -t` passes on prod-svr
 - SSL certificate chain includes intermediate CA (`depth=1`)
+- Server cert is the original (not a forged replacement) — verifies against bundled root CA
 
-**Layer 4 — Go Application (9 tests):**
+**Layer 4a — Go Application Functional (7 tests):**
 - `/healthz` returns 200
 - `/home` without auth returns 401
 - `/home` with auth returns 200
@@ -115,8 +120,23 @@ The test suite (`tests/test_outputs.py`) runs 17 tests across 4 layers:
 - Response is clean ASCII (no garbled bytes)
 - Response matches format `hello, <name>`
 - CORS `Access-Control-Allow-Origin` header present
+- OPTIONS preflight returns 200 with CORS headers
+
+**Layer 4b — Application Security (10 tests):**
+- `X-Content-Type-Options: nosniff` header present
+- `X-Frame-Options: DENY` header present
+- `Strict-Transport-Security` (HSTS) header present
+- Input length limit enforced (500-char name → 400)
+- XSS prevention: HTML in `name` is escaped (`<script>` → `&lt;script&gt;`)
+- Null bytes in `name` rejected with 400
+- `POST /home` returns 405
+- `DELETE /home` returns 405
+- Path traversal attempts (`/home/../etc/passwd`) return 400/404 without leaking
+- Wrong basic auth credentials return 401
+
+**Layer 4c — Code Quality & Infrastructure (4 tests):**
 - Go unit tests pass for `response.go` (`BuildGreeting`, `Resolve`)
-- Go unit tests pass for handlers (`handleHealth`, `handleHome`)
+- Go unit tests pass for handlers through full router (security headers, XSS, length limit, method restrictions)
 - `gorilla/mux` in `go.mod`
 - App running as `appuser`, not root
 

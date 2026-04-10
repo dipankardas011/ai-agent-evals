@@ -78,10 +78,14 @@ package main
 
 import (
 	"fmt"
+	"html"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 )
+
+const maxNameLength = 100
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
@@ -101,16 +105,41 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		name = "world"
 	}
 
-	builder := &CleanResponseBuilder{}
-	payload := builder.BuildGreeting(name)
+	// Length limit (DoS protection)
+	if len(name) > maxNameLength {
+		http.Error(w, "name parameter too long", http.StatusBadRequest)
+		return
+	}
 
-	w.Header().Set("Content-Type", "text/plain")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+	// Null byte rejection
+	if strings.ContainsRune(name, '\x00') {
+		http.Error(w, "invalid character in name", http.StatusBadRequest)
+		return
+	}
+
+	// HTML-escape the name to neutralize XSS / injection attempts
+	safeName := html.EscapeString(name)
+
+	builder := &CleanResponseBuilder{}
+	payload := builder.BuildGreeting(safeName)
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprint(w, payload)
 }
 
+// securityHeadersMiddleware adds baseline HTTP security headers to every response.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// corsMiddleware adds CORS headers and handles preflight requests.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -126,8 +155,10 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 func main() {
 	r := mux.NewRouter()
+	r.StrictSlash(true)
 	r.HandleFunc("/healthz", handleHealth).Methods("GET")
 	r.HandleFunc("/home", handleHome).Methods("GET", "OPTIONS")
+	r.Use(securityHeadersMiddleware)
 	r.Use(corsMiddleware)
 
 	addr := ":8080"
