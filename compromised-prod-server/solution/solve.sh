@@ -5,10 +5,8 @@ echo "=== Layer 1: Fix SSH access ==="
 
 # Fix the obfuscated umask in /etc/profile and /etc/bash.bashrc
 sed -i '/_m=uma/d' /etc/profile
-sed -i '/_m=uma/d' /etc/bash.bashrc
 
-# Set correct umask for this session
-umask 0022
+source /etc/profile
 
 # Fix the SSH private key permissions
 chmod 600 /root/.ssh/id_ed25519

@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     tmux \
     wget \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf '/var/lib/apt/lists/*'
 
 # Install Go from official tarball
 RUN wget -qO go.tar.gz https://go.dev/dl/go1.26.2.linux-amd64.tar.gz \
@@ -25,6 +25,7 @@ RUN echo 'export PATH="/usr/local/go/bin:$PATH"' >> /root/.bashrc \
     && echo 'export GOPATH="/root/go"' >> /root/.bashrc \
     && echo 'export PATH="/usr/local/go/bin:$PATH"' >> /etc/bash.bashrc \
     && echo 'PATH="/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' > /etc/environment
+
 ENV PATH="/usr/local/go/bin:/root/go/bin:${PATH}"
 ENV GOPATH="/root/go"
 

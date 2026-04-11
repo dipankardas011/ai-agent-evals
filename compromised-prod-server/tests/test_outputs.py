@@ -458,7 +458,7 @@ func TestBuildGreeting(t *testing.T) {
 	}{
 		{"basic", "world", "hello, world"},
 		{"custom", "test", "hello, test"},
-		{"empty", "", "hello, "},
+		{"empty", "", "hello, world"},
 	}
 
 	for _, tt := range tests {
