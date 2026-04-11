@@ -41,10 +41,12 @@ The challenge is layered: each fix unlocks access to the next problem. SSH must 
 | TLS/nginx | prod-svr nginx config | `proxy_pass` points to port `9090` (app listens on `8080`) |
 | TLS/nginx | prod-svr nginx config | Missing semicolon after `proxy_set_header X-Real-IP` in `/home` block (nginx silently fails to start) |
 | TLS/nginx | prod-svr nginx config | Suspicious `/admin` location block |
+| Auth/nginx | prod-svr nginx config | No HTTP Basic Auth on `/home` — agent must configure `auth_basic` + `auth_basic_user_file` (credentials `hello:1234`) with `limit_except OPTIONS` so CORS preflight still works. Auth is enforced at the edge; the Go app must not authenticate. |
 | Go app | prod-svr `/app/src/main.go` | `assemblePayload()` is obfuscated — hex decode → base64 round-trip → byte substitution that corrupts output |
 | Go app | prod-svr `/app/src/main.go` | Uses `net/http` default mux instead of `gorilla/mux` |
 | Go app | prod-svr `/app/src/main.go` | No CORS headers set |
-| Go app | prod-svr `/app/src/response.go` | `BuildGreeting` and `Resolve` are unimplemented (panic stubs) |
+| Go app | prod-svr `/app/src/greeting.go` | `PlainGreetingBuilder.Build` and `DecodeSplitBase64` are unimplemented (panic stubs) |
+| App security | Go handlers | `name` parameter must also reject non-ASCII input with 400 so the response body stays pure ASCII |
 | Go app | prod-svr `/app/src/go.mod` | Missing `gorilla/mux` dependency |
 | App security | Go handlers | No input validation — agent must add length limit, null-byte rejection, HTML-escape on `name` parameter |
 | App security | Go middleware | No HTTP security headers — agent must set `X-Content-Type-Options`, `X-Frame-Options`, `Strict-Transport-Security` |
@@ -53,7 +55,7 @@ The challenge is layered: each fix unlocks access to the next problem. SSH must 
 
 ### TLS Forensics Flow (intended solution path)
 
-The TLS layer is deliberately designed as an X.509 forensics puzzle. Simply concatenating files in `/etc/nginx/certs/` on prod-svr won't work — the intermediate cert isn't there. The agent must:
+The TLS layer is deliberately designed as an X.509 forensics puzzle. Simply concatenating files in `/etc/nginx/certs/` on prod-svr won't work — the intermediate cert isn't there. The jumphost doesn't have it either. During the breach, the attacker relocated the intermediate to a hidden path under prod-svr's `/var/tmp`. The agent must:
 
 1. **Observe HTTPS is broken** — either nginx won't start (syntax error) or the SSL handshake fails (after fixing syntax). `curl https://prod-svr/healthz` fails with a verification error.
 
@@ -63,56 +65,55 @@ The TLS layer is deliberately designed as an X.509 forensics puzzle. Simply conc
    ```
    The `Issuer` is `TestIntermediateCA` but only `ca.crt` (TestRootCA) is present in the certs directory. The chain is incomplete.
 
-3. **Find the AIA extension in the server cert:**
-   ```
-   X509v3 Authority Information Access:
-       CA Issuers - URI:file:///usr/local/share/ca-certificates/intermediate-ca.crt
-   ```
-   This is the breadcrumb. The Authority Information Access extension tells verifiers where to fetch the issuer's certificate.
+3. **Find the AIA extension in the server cert** — the Authority Information Access extension tells verifiers where to fetch the issuer's certificate. Combined with the breach context, this is the breadcrumb.
 
-4. **Check the path on prod-svr** — it's empty. `ls /usr/local/share/ca-certificates/` shows nothing. The file the AIA points to doesn't exist on prod-svr.
-
-5. **Reason laterally** — the only other machine the agent has access to is the jumphost. Check there:
+4. **Recon for attacker-planted files on prod-svr** — dotfiles, unusual extensions, backdated mtimes under `/var/tmp`, `/opt`, `/tmp`:
    ```
-   ls /usr/local/share/ca-certificates/
-   # prod-ca.crt
-   # intermediate-ca.crt   ← found it
+   find /var/tmp /opt /tmp -type f -name '.*' -o -name '*.old' 2>/dev/null
+   # /var/tmp/.cache/._x509_bundle.old   ← planted intermediate
+   ```
+   Verify it's actually the issuing cert:
+   ```
+   openssl x509 -in /var/tmp/.cache/._x509_bundle.old -noout -subject -issuer
+   # subject = CN=TestIntermediateCA
+   # issuer  = CN=TestRootCA
    ```
 
-6. **Copy the intermediate cert over** (via `scp` from jumphost, or paste the PEM contents over SSH):
+5. **Copy it into the nginx certs dir and build the fullchain bundle:**
    ```
-   scp /usr/local/share/ca-certificates/intermediate-ca.crt prod-svr:/etc/nginx/certs/intermediate.crt
-   ```
-
-7. **Build the fullchain bundle:**
-   ```
+   cp /var/tmp/.cache/._x509_bundle.old /etc/nginx/certs/intermediate.crt
    cat server.crt intermediate.crt > fullchain.crt
    ```
 
-8. **Update nginx config** to use `fullchain.crt` instead of `server.crt`, and reload.
+6. **Update nginx config** to use `fullchain.crt` instead of `server.crt`, and reload.
 
-This layer tests whether the agent can read X.509 extensions (not just run `openssl verify`), interpret AIA URIs, and reason across machine boundaries. A naive agent that just tries to rebuild the chain locally on prod-svr will fail.
+This layer tests whether the agent can read X.509 extensions, interpret AIA metadata, reason about attacker persistence patterns, and hunt for planted artifacts. A naive agent that tries to regenerate the chain locally will hit the "server cert is original" test and fail.
+
+The jumphost keeps its own copy of the **root CA** (not the intermediate) at `/etc/ssl/trusted/prod-root-ca.crt`. The test suite enforces that this file stays put with the correct fingerprint — downstream systems on the jumphost depend on that exact path and filename.
 
 ## Verification
 
-The test suite (`tests/test_outputs.py`) runs 17 tests across 4 layers:
+The test suite (`tests/test_outputs.py`) runs 35 tests across 4 layers:
 
-**Layer 1 — SSH Access (3 tests):**
+**Layer 1 — SSH Access (4 tests):**
 - SSH from jumphost to prod-svr works
 - System umask is restored to a safe value (not `0000`)
+- Newly created files are not world-writable
 - SSH private key has correct permissions (`0600`)
 
-**Layer 2 — Backdoor Removal (3 tests):**
-- No attacker key in `authorized_keys`
+**Layer 2 — Backdoor Removal (4 tests):**
+- No attacker key in `authorized_keys` (legit operator key preserved)
+- prod-svr's `authorized_keys` still contains the legit jumphost key
 - No backdoor cron files exist, no cron jobs writing to `authorized_keys`
 - After waiting 70 seconds, attacker key does NOT reappear
 
-**Layer 3 — TLS/SSL (3 tests):**
+**Layer 3 — TLS/SSL (4 tests):**
+- Jumphost root CA is intact at `/etc/ssl/trusted/prod-root-ca.crt` with matching fingerprint
 - `nginx -t` passes on prod-svr
 - SSL certificate chain includes intermediate CA (`depth=1`)
 - Server cert is the original (not a forged replacement) — verifies against bundled root CA
 
-**Layer 4a — Go Application Functional (7 tests):**
+**Layer 4a — Go Application Functional (8 tests):**
 - `/healthz` returns 200
 - `/home` without auth returns 401
 - `/home` with auth returns 200
@@ -122,20 +123,21 @@ The test suite (`tests/test_outputs.py`) runs 17 tests across 4 layers:
 - CORS `Access-Control-Allow-Origin` header present
 - OPTIONS preflight returns 200 with CORS headers
 
-**Layer 4b — Application Security (10 tests):**
+**Layer 4b — Application Security (11 tests):**
 - `X-Content-Type-Options: nosniff` header present
 - `X-Frame-Options: DENY` header present
 - `Strict-Transport-Security` (HSTS) header present
 - Input length limit enforced (500-char name → 400)
 - XSS prevention: HTML in `name` is escaped (`<script>` → `&lt;script&gt;`)
 - Null bytes in `name` rejected with 400
+- Non-ASCII characters in `name` rejected with 400
 - `POST /home` returns 405
 - `DELETE /home` returns 405
 - Path traversal attempts (`/home/../etc/passwd`) return 400/404 without leaking
 - Wrong basic auth credentials return 401
 
 **Layer 4c — Code Quality & Infrastructure (4 tests):**
-- Go unit tests pass for `response.go` (`BuildGreeting`, `Resolve`)
+- Go unit tests pass for `greeting.go` (`PlainGreetingBuilder.Build`, `DecodeSplitBase64`, ASCII-only output)
 - Go unit tests pass for handlers through full router (security headers, XSS, length limit, method restrictions)
 - `gorilla/mux` in `go.mod`
 - App running as `appuser`, not root

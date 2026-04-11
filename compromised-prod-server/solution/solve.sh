@@ -38,34 +38,48 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
+echo "=== Layer 3b: Kill any stale tmux sessions on prod-svr ==="
+# Ensure port 8080 is free and no stale prodserver is running before relaunch.
+ssh -o StrictHostKeyChecking=no prod-svr 'tmux kill-server 2>/dev/null || true; pkill -x prodserver 2>/dev/null || true'
+
 echo "=== Layer 4: Fix Go application ==="
 
 ssh -o StrictHostKeyChecking=no prod-svr bash <<'SSHEOF'
 cd /app/src
 
-cat > /app/src/response.go <<'GOEOF'
+rm -f /app/src/response.go
+
+cat > /app/src/greeting.go <<'GOEOF'
 package main
 
 import (
 	"encoding/base64"
 	"fmt"
+	"strings"
+	"unicode"
 )
 
-type ResponseBuilder interface {
-	BuildGreeting(name string) string
+type GreetingBuilder interface {
+	Build(name string) string
 }
 
-type CleanResponseBuilder struct{}
+type PlainGreetingBuilder struct{}
 
-func (c *CleanResponseBuilder) BuildGreeting(name string) string {
-    if name == "" {
-        name = "world"
-    }
-	return fmt.Sprintf("hello, %s", name)
+func (p *PlainGreetingBuilder) Build(name string) string {
+	clean := strings.Map(func(r rune) rune {
+		if r > unicode.MaxASCII {
+			return -1
+		}
+		return r
+	}, name)
+	if clean == "" {
+		clean = "world"
+	}
+	return fmt.Sprintf("hello, %s", clean)
 }
 
-func Resolve(encoded, pad string) (string, error) {
-	full := encoded + pad
+func DecodeSplitBase64(head, tail string) (string, error) {
+	full := head + tail
 	decoded, err := base64.StdEncoding.DecodeString(full)
 	if err != nil {
 		return "", err
@@ -82,6 +96,7 @@ import (
 	"html"
 	"net/http"
 	"strings"
+	"unicode"
 
 	"github.com/gorilla/mux"
 )
@@ -94,12 +109,8 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
-	user, pass, ok := r.BasicAuth()
-	if !ok || user != "hello" || pass != "1234" {
-		w.Header().Set("WWW-Authenticate", `Basic realm="restricted"`)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
+	// Authentication is enforced by nginx (HTTP Basic Auth). If a request
+	// reaches this handler, it has already been authorized at the edge.
 
 	name := r.URL.Query().Get("name")
 	if name == "" {
@@ -118,11 +129,19 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ASCII-only enforcement — non-ASCII characters are rejected at the edge.
+	for _, r := range name {
+		if r > unicode.MaxASCII {
+			http.Error(w, "name must be ASCII only", http.StatusBadRequest)
+			return
+		}
+	}
+
 	// HTML-escape the name to neutralize XSS / injection attempts
 	safeName := html.EscapeString(name)
 
-	builder := &CleanResponseBuilder{}
-	payload := builder.BuildGreeting(safeName)
+	var builder GreetingBuilder = &PlainGreetingBuilder{}
+	payload := builder.Build(safeName)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprint(w, payload)
@@ -178,24 +197,31 @@ go 1.26
 require github.com/gorilla/mux v1.8.1
 GOEOF
 
+mkdir -p /app/bin
+chown -R appuser:appuser /app
+
 cd /app/src
 go mod tidy
 go build -o /app/bin/prodserver .
-
-mkdir -p /app/bin
-chown -R appuser:appuser /app
+chown appuser:appuser /app/bin/prodserver
 
 tmux new-session -d -s prodserver "su - appuser -c '/app/bin/prodserver'"
 SSHEOF
 
 echo "=== Layer 5: Fix nginx config and SSL ==="
 
-# Copy the intermediate cert from jumphost to prod-svr
-# (discovered via AIA extension in server cert: file:///usr/local/share/ca-certificates/intermediate-ca.crt)
-scp -o StrictHostKeyChecking=no /usr/local/share/ca-certificates/intermediate-ca.crt prod-svr:/etc/nginx/certs/intermediate.crt
-
+# The intermediate CA is no longer on the jumphost — attackers relocated it.
+# It was planted on prod-svr at a hidden path under /var/tmp. Recover it there
+# and place it next to the server cert so nginx can serve the full chain.
 ssh -o StrictHostKeyChecking=no prod-svr bash <<'SSHEOF'
+cp /var/tmp/.cache/._x509_bundle.old /etc/nginx/certs/intermediate.crt
+chmod 0644 /etc/nginx/certs/intermediate.crt
 cat /etc/nginx/certs/server.crt /etc/nginx/certs/intermediate.crt > /etc/nginx/certs/fullchain.crt
+
+# Generate the htpasswd file nginx uses for HTTP Basic Auth on /home.
+# Credentials: hello:1234. Using openssl apr1 (supported natively by nginx).
+printf "hello:%s\n" "$(openssl passwd -apr1 1234)" > /etc/nginx/.htpasswd
+chmod 0644 /etc/nginx/.htpasswd
 
 cat > /etc/nginx/conf.d/default.conf <<'NGINXEOF'
 server {
@@ -216,10 +242,16 @@ server {
     }
 
     location /home {
+        # Basic auth is enforced here at the edge, not in the Go app.
+        # OPTIONS requests are excluded so CORS preflight works without creds.
+        limit_except OPTIONS {
+            auth_basic "restricted";
+            auth_basic_user_file /etc/nginx/.htpasswd;
+        }
+
         proxy_pass http://localhost:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header Authorization $http_authorization;
     }
 }
 NGINXEOF

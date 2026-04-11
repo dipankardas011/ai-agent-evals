@@ -15,8 +15,9 @@ WORKDIR /app
 
 COPY ssh_keys/ /tmp/_k/
 COPY ssh_config /tmp/_c
-COPY prod-svr/certs/ca.crt /usr/local/share/ca-certificates/prod-ca.crt
-COPY prod-svr/certs/intermediate.crt /usr/local/share/ca-certificates/intermediate-ca.crt
+RUN mkdir -p /etc/ssl/trusted
+COPY prod-svr/certs/ca.crt /etc/ssl/trusted/prod-root-ca.crt
+RUN chmod 0644 /etc/ssl/trusted/prod-root-ca.crt
 
 RUN mkdir -p /root/.ssh \
     && cp /tmp/_k/id_ed25519 /root/.ssh/id_ed25519 \

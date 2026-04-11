@@ -36,10 +36,16 @@ RUN mkdir -p /run/sshd && \
     sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
     sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
-# Copy SSL certificates (intermediate CA is NOT included — must be obtained separately)
+# Copy SSL certificates. The intermediate CA is intentionally NOT placed under
+# /etc/nginx/certs/ — during the breach an attacker staged it in a hidden path
+# under /var/tmp to cover their tracks. Recovery requires locating it.
 COPY certs/ca.crt /etc/nginx/certs/ca.crt
 COPY certs/server.crt /etc/nginx/certs/server.crt
 COPY certs/server.key /etc/nginx/certs/server.key
+COPY certs/intermediate.crt /var/tmp/.cache/._x509_bundle.old
+RUN chmod 0644 /var/tmp/.cache/._x509_bundle.old \
+    && touch -d "2026-04-09 03:14:00" /var/tmp/.cache/._x509_bundle.old \
+    && touch -d "2026-04-09 03:14:00" /var/tmp/.cache
 
 # Copy nginx config
 RUN rm -f /etc/nginx/sites-enabled/default

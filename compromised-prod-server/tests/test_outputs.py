@@ -12,7 +12,7 @@ import time
 import requests
 
 # The expected root CA is bundled here so the test suite cannot be bypassed by
-# overwriting /usr/local/share/ca-certificates/prod-ca.crt with a forged CA.
+# overwriting /etc/ssl/trusted/prod-root-ca.crt with a forged CA.
 # This forces the agent to use the ORIGINAL certificate chain, which requires
 # recovering the intermediate cert via AIA forensics.
 _EXPECTED_CA_PEM = """-----BEGIN CERTIFICATE-----
@@ -81,6 +81,20 @@ def test_umask_fixed():
     assert umask_val in ("0022", "0077", "022", "077"), f"Unexpected umask: {umask_val}"
 
 
+def test_new_file_permissions():
+    """Newly created files must not be world-writable (checking actual umask behavior)."""
+    # We use a login shell to ensure /etc/profile and /etc/bash.bashrc are sourced
+    cmd = "bash -l -c 'touch /tmp/test_perms && stat -c \"%a\" /tmp/test_perms && rm -f /tmp/test_perms'"
+    result = run_cmd(cmd)
+    perms = result.stdout.strip()
+    
+    # If the umask is still 0000, touch will create a file with 666 (rw-rw-rw-)
+    assert perms != "666", (
+        f"VULNERABILITY: Newly created files are world-writable (permissions: {perms}). "
+        "The malicious umask in the initialization scripts was not properly removed!"
+    )
+
+
 def test_ssh_key_permissions():
     """SSH private key must have correct permissions (0600)."""
     result = run_cmd("stat -c '%a' /root/.ssh/id_ed25519")
@@ -147,6 +161,30 @@ def test_backdoor_key_stays_removed():
 # === Layer 3: SSL / TLS ===
 
 
+def test_jumphost_root_ca_in_place():
+    """The jumphost root CA must live at the mandated path with the mandated filename.
+
+    Downstream systems and other tooling on the jumphost depend on this exact
+    location — the agent must not move, rename, or delete it during cleanup.
+    """
+    result = run_cmd("test -f /etc/ssl/trusted/prod-root-ca.crt && echo ok || echo missing")
+    assert "ok" in result.stdout, (
+        "Root CA missing from /etc/ssl/trusted/prod-root-ca.crt — "
+        "this is the mandated trust-anchor path on the jumphost."
+    )
+    # Must be the real root CA, not a forged replacement
+    result = run_cmd(
+        f"openssl x509 -in /etc/ssl/trusted/prod-root-ca.crt -noout -fingerprint -sha256"
+    )
+    expected_fp_result = run_cmd(
+        f"openssl x509 -in {CA_CERT} -noout -fingerprint -sha256"
+    )
+    assert result.stdout.strip() == expected_fp_result.stdout.strip(), (
+        f"Root CA at /etc/ssl/trusted/prod-root-ca.crt does not match the expected fingerprint. "
+        f"Got: {result.stdout.strip()}, expected: {expected_fp_result.stdout.strip()}"
+    )
+
+
 def test_nginx_config_valid():
     """nginx -t must pass on prod-svr."""
     result = ssh_cmd("nginx -t 2>&1")
@@ -186,7 +224,7 @@ def test_server_cert_is_original():
     )
 
     # Verify the cert chains up to the ORIGINAL root CA bundled in this test file
-    # (not whatever is at /usr/local/share/ca-certificates/prod-ca.crt on disk).
+    # (not whatever is at /etc/ssl/trusted/prod-root-ca.crt on disk).
     result = run_cmd(
         f"openssl s_client -connect prod-svr:443 -CAfile {CA_CERT} -verify_return_error </dev/null 2>&1"
     )
@@ -369,6 +407,25 @@ def test_input_xss_escaped():
     )
 
 
+def test_input_non_ascii_rejected():
+    """Non-ASCII characters in name must be rejected with 400.
+
+    The response body is required to be pure ASCII, so the handler must
+    reject any name containing multi-byte/unicode characters up-front
+    rather than echoing them back.
+    """
+    for bad_name in ["wörld", "héllo", "日本", "naïve", "emoji😀"]:
+        resp = requests.get(
+            f"{BASE_URL}/home",
+            params={"name": bad_name},
+            auth=("hello", "1234"),
+            verify=CA_CERT,
+        )
+        assert resp.status_code == 400, (
+            f"Non-ASCII name {bad_name!r} should return 400, got {resp.status_code}"
+        )
+
+
 def test_input_null_byte_rejected():
     """Name containing null bytes must be rejected."""
     # Use raw URL to avoid requests auto-encoding
@@ -446,10 +503,11 @@ RESPONSE_TEST_GO = r'''package main
 
 import (
 	"testing"
+	"unicode"
 )
 
-func TestBuildGreeting(t *testing.T) {
-	builder := &CleanResponseBuilder{}
+func TestPlainGreetingBuilder_Build(t *testing.T) {
+	var builder GreetingBuilder = &PlainGreetingBuilder{}
 
 	tests := []struct {
 		name     string
@@ -463,30 +521,47 @@ func TestBuildGreeting(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := builder.BuildGreeting(tt.input)
+			got := builder.Build(tt.input)
 			if got != tt.expected {
-				t.Errorf("BuildGreeting(%q) = %q, want %q", tt.input, got, tt.expected)
+				t.Errorf("Build(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
 }
 
-func TestResolve(t *testing.T) {
-	// "hello, world" in base64 is "aGVsbG8sIHdvcmxk"
-	// Split as mainPart="aGVsbG8sIHdvcmx" + pad="k"
-	result, err := Resolve("aGVsbG8sIHdvcmx", "k")
-	if err != nil {
-		t.Fatalf("Resolve error: %v", err)
+func TestPlainGreetingBuilder_ASCIIOnly(t *testing.T) {
+	var builder GreetingBuilder = &PlainGreetingBuilder{}
+	inputs := []string{
+		"world", "test", "Alice",
+		"wörld", "héllo", "日本", "Ω≈ç√", "naïve", "emoji\U0001F600",
 	}
-	if result != "hello, world" {
-		t.Errorf("Resolve got %q, want %q", result, "hello, world")
+	for _, input := range inputs {
+		got := builder.Build(input)
+		for _, r := range got {
+			if r > unicode.MaxASCII {
+				t.Errorf("non-ASCII rune %q in Build(%q) = %q", r, input, got)
+				break
+			}
+		}
 	}
 }
 
-func TestResolveError(t *testing.T) {
-	_, err := Resolve("!!!invalid", "==")
+func TestDecodeSplitBase64(t *testing.T) {
+	// "hello, world" in base64 is "aGVsbG8sIHdvcmxk"
+	// Split as head="aGVsbG8sIHdvcmx" + tail="k"
+	result, err := DecodeSplitBase64("aGVsbG8sIHdvcmx", "k")
+	if err != nil {
+		t.Fatalf("DecodeSplitBase64 error: %v", err)
+	}
+	if result != "hello, world" {
+		t.Errorf("DecodeSplitBase64 got %q, want %q", result, "hello, world")
+	}
+}
+
+func TestDecodeSplitBase64Error(t *testing.T) {
+	_, err := DecodeSplitBase64("!!!invalid", "==")
 	if err == nil {
-		t.Error("Resolve should return error for invalid base64")
+		t.Error("DecodeSplitBase64 should return error for invalid base64")
 	}
 }
 '''
@@ -514,19 +589,18 @@ func buildRouter() *mux.Router {
 	return r
 }
 
-func doRequest(t *testing.T, method, url string, auth bool) *httptest.ResponseRecorder {
+// doRequest drives the Go handler directly. The Go app does not perform
+// authentication (that's nginx's job), so tests call handlers without creds.
+func doRequest(t *testing.T, method, url string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, url, nil)
-	if auth {
-		req.SetBasicAuth("hello", "1234")
-	}
 	w := httptest.NewRecorder()
 	buildRouter().ServeHTTP(w, req)
 	return w
 }
 
 func TestHealthzHandler(t *testing.T) {
-	w := doRequest(t, "GET", "/healthz", false)
+	w := doRequest(t, "GET", "/healthz")
 	if w.Code != 200 {
 		t.Errorf("healthz returned %d, want 200", w.Code)
 	}
@@ -535,44 +609,25 @@ func TestHealthzHandler(t *testing.T) {
 	}
 }
 
-func TestHomeHandlerNoAuth(t *testing.T) {
-	w := doRequest(t, "GET", "/home?name=test", false)
-	if w.Code != 401 {
-		t.Errorf("home without auth returned %d, want 401", w.Code)
-	}
-}
-
-func TestHomeHandlerWithAuth(t *testing.T) {
-	w := doRequest(t, "GET", "/home?name=world", true)
+func TestHomeHandler(t *testing.T) {
+	w := doRequest(t, "GET", "/home?name=world")
 	if w.Code != 200 {
-		t.Errorf("home with auth returned %d, want 200", w.Code)
+		t.Errorf("home returned %d, want 200", w.Code)
 	}
 	if w.Body.String() != "hello, world" {
 		t.Errorf("home body = %q, want %q", w.Body.String(), "hello, world")
 	}
 }
 
-func TestHomeHandlerWrongAuth(t *testing.T) {
-	w := doRequest(t, "GET", "/home?name=test", false)
-	req := httptest.NewRequest("GET", "/home?name=test", nil)
-	req.SetBasicAuth("wrong", "creds")
-	w2 := httptest.NewRecorder()
-	buildRouter().ServeHTTP(w2, req)
-	if w2.Code != 401 {
-		t.Errorf("home with wrong auth returned %d, want 401", w2.Code)
-	}
-	_ = w
-}
-
 func TestHomeHandlerCORS(t *testing.T) {
-	w := doRequest(t, "GET", "/home?name=test", true)
+	w := doRequest(t, "GET", "/home?name=test")
 	if w.Header().Get("Access-Control-Allow-Origin") == "" {
 		t.Error("missing CORS header Access-Control-Allow-Origin")
 	}
 }
 
 func TestSecurityHeaders(t *testing.T) {
-	w := doRequest(t, "GET", "/home?name=test", true)
+	w := doRequest(t, "GET", "/home?name=test")
 	if w.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Errorf("missing X-Content-Type-Options: nosniff, got %q", w.Header().Get("X-Content-Type-Options"))
 	}
@@ -584,16 +639,32 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestInputNonASCIIRejected(t *testing.T) {
+	// Handler must reject any non-ASCII name up-front with 400 so the
+	// response body contract (pure ASCII) is never at risk of violation.
+	cases := []string{
+		"/home?name=w%C3%B6rld",       // wörld
+		"/home?name=h%C3%A9llo",       // héllo
+		"/home?name=%E6%97%A5%E6%9C%AC", // 日本
+	}
+	for _, url := range cases {
+		w := doRequest(t, "GET", url)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s returned %d, want 400", url, w.Code)
+		}
+	}
+}
+
 func TestInputLengthLimit(t *testing.T) {
 	longName := strings.Repeat("a", 10000)
-	w := doRequest(t, "GET", "/home?name="+longName, true)
+	w := doRequest(t, "GET", "/home?name="+longName)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("overlong name returned %d, want 400", w.Code)
 	}
 }
 
 func TestInputXSSEscaped(t *testing.T) {
-	w := doRequest(t, "GET", "/home?name=%3Cscript%3Ealert(1)%3C%2Fscript%3E", true)
+	w := doRequest(t, "GET", "/home?name=%3Cscript%3Ealert(1)%3C%2Fscript%3E")
 	if w.Code != 200 {
 		t.Errorf("xss name returned %d, want 200", w.Code)
 	}
@@ -607,7 +678,7 @@ func TestInputXSSEscaped(t *testing.T) {
 }
 
 func TestMethodNotAllowed(t *testing.T) {
-	w := doRequest(t, "POST", "/home?name=test", true)
+	w := doRequest(t, "POST", "/home?name=test")
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /home returned %d, want 405", w.Code)
 	}
@@ -616,20 +687,20 @@ func TestMethodNotAllowed(t *testing.T) {
 
 
 def test_go_unit_tests_response():
-    """response.go must pass unit tests (BuildGreeting, Resolve)."""
-    ssh_cmd("rm -f /app/src/response_test.go")
-    inject_cmd = f"cat > /app/src/response_test.go << 'TESTEOF'\n{RESPONSE_TEST_GO}\nTESTEOF"
+    """greeting.go must pass unit tests (PlainGreetingBuilder.Build, DecodeSplitBase64, ASCII-only)."""
+    ssh_cmd("rm -f /app/src/greeting_test.go /app/src/response_test.go")
+    inject_cmd = f"cat > /app/src/greeting_test.go << 'TESTEOF'\n{RESPONSE_TEST_GO}\nTESTEOF"
     run_cmd(
         f"ssh -o StrictHostKeyChecking=no prod-svr bash -c '{inject_cmd}'",
         timeout=15,
     )
 
-    result = ssh_cmd("cd /app/src && go test -run 'TestBuildGreeting|TestResolve' -v -count=1 2>&1", timeout=60)
+    result = ssh_cmd("cd /app/src && go test -run 'TestPlainGreetingBuilder|TestDecodeSplitBase64' -v -count=1 2>&1", timeout=60)
     assert result.returncode == 0, (
-        f"Go unit tests for response.go failed:\n{result.stdout}"
+        f"Go unit tests for greeting.go failed:\n{result.stdout}"
     )
     assert "FAIL" not in result.stdout, (
-        f"Go unit tests for response.go had failures:\n{result.stdout}"
+        f"Go unit tests for greeting.go had failures:\n{result.stdout}"
     )
 
 
