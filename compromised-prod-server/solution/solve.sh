@@ -58,6 +58,9 @@ type ResponseBuilder interface {
 type CleanResponseBuilder struct{}
 
 func (c *CleanResponseBuilder) BuildGreeting(name string) string {
+    if name == "" {
+        name = "world"
+    }
 	return fmt.Sprintf("hello, %s", name)
 }
 
