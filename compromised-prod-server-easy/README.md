@@ -62,7 +62,7 @@ The jumphost also keeps the root CA at `/etc/ssl/trusted/prod-root-ca.crt`. The 
 
 ## Verification
 
-The test suite (`tests/test_outputs.py`) runs ~25 tests across these layers:
+The test suite (`tests/test_outputs.py`) runs 30 tests across these layers:
 
 **Layer 1 — SSH Access (2 tests):**
 - SSH from jumphost to prod-svr works

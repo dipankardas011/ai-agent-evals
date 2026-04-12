@@ -38,10 +38,6 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-echo "=== Layer 3b: Kill any stale tmux sessions on prod-svr ==="
-# Ensure port 8080 is free and no stale prodserver is running before relaunch.
-ssh -o StrictHostKeyChecking=no prod-svr 'tmux kill-server 2>/dev/null || true; pkill -x prodserver 2>/dev/null || true'
-
 echo "=== Layer 4: Fix Go application ==="
 
 ssh -o StrictHostKeyChecking=no prod-svr bash <<'SSHEOF'
