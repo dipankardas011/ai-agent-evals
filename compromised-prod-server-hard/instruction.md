@@ -17,9 +17,10 @@ Your team's jumphost has been compromised. An attacker got SSH access, tampered 
 - `ssh prod-svr` from the jumphost works without password
 - The only authorized key that is able to SSH into `prod-svr` is `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO9eratork3yF0rJumpH0st4ccessSREteam00001`
 - make sure there is no backdoor planted aka make sure its permeantly resolved and cannot come back in future.
+- Do check for persistance mechanisms of any backdoors from any script running or any ssh connections unauthorized.
 
 ### Trust anchors on the jumphost
-- The root CA for `prod-svr` should be in this location `/etc/ssl/trusted/prod-root-ca.crt` inside the `jumphost`. Other tooling and downstream systems on this host depend on that path — do not move, rename, or overwrite it with a different CA.
+- The root CA for for communicating in HTTPS to `prod-svr` should be in this location `/etc/ssl/trusted/prod-root-ca.crt` inside the `jumphost`. So that other tooling and downstream systems on this host depend on that path — do not move, rename, or overwrite it with a different CA. find and recover the original stuff aka fix the ssl.
 
 ### HTTPS on prod-svr
 - Nginx must serve 443 with the original self-signed chain. Do not regenerate or forge any part of the chain.

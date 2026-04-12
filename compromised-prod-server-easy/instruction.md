@@ -17,9 +17,10 @@ Your team's jumphost has been compromised. An attacker got SSH access, planted a
 - `ssh prod-svr` from the jumphost works without password.
 - The only authorized key that is able to SSH into `prod-svr` is `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO9eratork3yF0rJumpH0st4ccessSREteam00001`.
 - Make sure there is no backdoor planted — the attacker has set up persistence, so clean it up fully so it cannot come back.
+- Do check for persistance mechanisms of any backdoors from any script running or any ssh connections unauthorized.
 
 ### HTTPS on prod-svr
-TLS material is already on disk on `prod-svr` — no forensics required. Inspect the existing nginx config and the certs directory it references to see what's provided (leaf, intermediate, root, key, and a pre-assembled full chain).
+TLS material is already on disk on `prod-svr`. Inspect the existing nginx config and the certs directory it references to see what's provided make sure to use them for curl from the jumphost to the prod-svr for https. and in the jumphost its in `/etc/ssl/trusted/prod-root-ca.crt` you need to use that when making https requests to prod-svr from the jumphost.
 
 - Nginx must serve 443 with the provided chain. Do not regenerate or forge any part of it.
 - HTTPS requests from the jumphost to `https://prod-svr` must pass standard TLS verification — no `--insecure`, no `-k` check for the certs.
