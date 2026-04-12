@@ -110,22 +110,11 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func withMethods(allowed []string, h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		for _, m := range allowed {
-			if r.Method == m {
-				h(w, r)
-				return
-			}
-		}
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
 func main() {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", withMethods([]string{http.MethodGet}, handleHealth))
-	mux.HandleFunc("/home", withMethods([]string{http.MethodGet, http.MethodOptions}, handleHome))
+	mux.HandleFunc("GET /healthz", handleHealth)
+	mux.HandleFunc("GET /home", handleHome)
+	mux.HandleFunc("OPTIONS /home", handleHome)
 
 	handler := securityHeadersMiddleware(corsMiddleware(mux))
 

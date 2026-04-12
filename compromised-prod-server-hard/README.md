@@ -13,7 +13,7 @@ The challenge is layered: each fix unlocks access to the next problem. SSH must 
 - **Persistence mechanism detection:** Finding obfuscated cron-based backdoors that use base64-encoded payloads
 - **X.509 certificate forensics:** Inspecting cert extensions (AIA), tracing certificate chains across machines, building fullchain bundles, fixing nginx TLS config
 - **Nginx reverse proxy setup:** Correct proxy_pass configuration, header forwarding, port matching
-- **Go development:** Reading obfuscated code, implementing interfaces, adding dependencies (`gorilla/mux`), building and running binaries, writing middleware
+- **Go development:** Reading obfuscated code, building and running binaries, writing middleware
 - **Application security:** Input validation, XSS prevention (HTML escaping), length limits, null byte rejection, HTTP security headers (X-Content-Type-Options, X-Frame-Options, HSTS), method restrictions, CORS with preflight
 - **Linux security:** Running services as non-root users
 - **Multi-host orchestration:** Working across jumphost and prod-svr via SSH
@@ -43,11 +43,10 @@ The challenge is layered: each fix unlocks access to the next problem. SSH must 
 | TLS/nginx | prod-svr nginx config | Suspicious `/admin` location block |
 | Auth/nginx | prod-svr nginx config | No HTTP Basic Auth on `/home` — agent must configure `auth_basic` + `auth_basic_user_file` (credentials `hello:1234`) with `limit_except OPTIONS` so CORS preflight still works. Auth is enforced at the edge; the Go app must not authenticate. |
 | Go app | prod-svr `/app/src/main.go` | `assemblePayload()` is obfuscated — hex decode → base64 round-trip → byte substitution that corrupts output |
-| Go app | prod-svr `/app/src/main.go` | Uses `net/http` default mux instead of `gorilla/mux` |
-| Go app | prod-svr `/app/src/main.go` | No CORS headers set |
-| Go app | prod-svr `/app/src/greeting.go` | `PlainGreetingBuilder.Build` and `DecodeSplitBase64` are unimplemented (panic stubs) |
+| Go app | prod-svr `/app/src/main.go` | Uses `net/http` default mux — no middleware, no CORS |
+| Go app | prod-svr `/app/src/main.go` | No CORS headers, no security headers, no method restrictions, no input validation |
 | App security | Go handlers | `name` parameter must also reject non-ASCII input with 400 so the response body stays pure ASCII |
-| Go app | prod-svr `/app/src/go.mod` | Missing `gorilla/mux` dependency |
+| Go app | prod-svr `/app/src/go.mod` | No external dependencies listed |
 | App security | Go handlers | No input validation — agent must add length limit, null-byte rejection, HTML-escape on `name` parameter |
 | App security | Go middleware | No HTTP security headers — agent must set `X-Content-Type-Options`, `X-Frame-Options`, `Strict-Transport-Security` |
 | App security | Go routing | No method restrictions — agent must return 405 for non-GET methods on `/home` |
@@ -93,7 +92,7 @@ The jumphost keeps its own copy of the **root CA** (not the intermediate) at `/e
 
 ## Verification
 
-The test suite (`tests/test_outputs.py`) runs 35 tests across 4 layers:
+The test suite (`tests/test_outputs.py`) runs 33 tests across 4 layers:
 
 **Layer 1 — SSH Access (4 tests):**
 - SSH from jumphost to prod-svr works
@@ -136,10 +135,8 @@ The test suite (`tests/test_outputs.py`) runs 35 tests across 4 layers:
 - Path traversal attempts (`/home/../etc/passwd`) return 400/404 without leaking
 - Wrong basic auth credentials return 401
 
-**Layer 4c — Code Quality & Infrastructure (4 tests):**
-- Go unit tests pass for `greeting.go` (`PlainGreetingBuilder.Build`, `DecodeSplitBase64`, ASCII-only output)
-- Go unit tests pass for handlers through full router (security headers, XSS, length limit, method restrictions)
-- `gorilla/mux` in `go.mod`
+**Layer 4c — Code Quality & Infrastructure (2 tests):**
+- Go unit tests pass for handlers through full middleware chain (security headers, XSS, length limit, method restrictions). The test suite injects a `handler_test.go` that uses plain `net/http` — no router dependency is required from the agent.
 - App running as `appuser`, not root
 
 ## Running the Environment

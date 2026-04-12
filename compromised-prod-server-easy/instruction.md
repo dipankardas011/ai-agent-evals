@@ -24,7 +24,7 @@ TLS material is already on disk on `prod-svr` — no forensics required. Inspect
 - Nginx must serve 443 with the provided chain. Do not regenerate or forge any part of it.
 - HTTPS requests from the jumphost to `https://prod-svr` must pass standard TLS verification — no `--insecure`, no `-k` check for the certs.
 - `/home` and `/healthz` on port 443 must reverse-proxy to the Go app on `localhost:8080`, preserving the app's response headers.
-- HTTP Basic Auth on `/home` is enforced **at the nginx layer only**. The Go app must not perform any auth check. Credentials: `hello:1234`. `/healthz` must remain open (no auth). `OPTIONS` preflight on `/home` must also be allowed without credentials so CORS works.
+- HTTP Basic Auth on `/home` is enforced **at the nginx layer only**. The Go app must not perform any auth check. Credentials: `hello:1234`. `/healthz` must remain open (no auth).
 
 ### Go application
 - Source code lives at `/app/src` on `prod-svr`. Keep it there.
@@ -38,8 +38,8 @@ TLS material is already on disk on `prod-svr` — no forensics required. Inspect
 
 ### Security requirements for the Go app
 - `/home` allows only `GET` and `OPTIONS`. Any other method → 405.
-- CORS: set `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers`, and handle the `OPTIONS` preflight with a 200 response (no auth required on preflight).
-- Security headers on every response: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security: max-age=...`. only for the backend
+- CORS: set `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, and `Access-Control-Allow-Headers` on every response. Handle `OPTIONS` preflight properly.
+- Security headers on every response: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security: max-age=...`. Set these in the backend only.
 - Input validation on `name`:
   - reject lengths over 100 with 400
   - reject null bytes with 400
@@ -47,8 +47,9 @@ TLS material is already on disk on `prod-svr` — no forensics required. Inspect
   - HTML-escape before echoing (XSS)
 
 ### Running the Go app
-- Build first. The binary name must be `prodserver`.
+- Build first. Make sure the build succeeds before proceeding. The binary name must be `prodserver`.
 - The process must run as `appuser` — never root. `appuser` has no sudo and no root access. `/app/src` starts out owned by root, so permissions will need adjustment.
 - Run the binary inside a `tmux` session on `prod-svr` so it survives the SSH disconnect.
+- After starting the service, verify end-to-end with `curl` or similar — confirm that HTTPS, auth, and the application endpoints all work as expected before considering the task done.
 
-> Think like a DevSecOps engineer: deal with the backdoor *first*, then stand the service back up. The attacker's persistence mechanism will re-plant artifacts if you only do a surface-level cleanup.
+> Think like a DevSecOps engineer: think before you act. The attacker's persistence mechanism will re-plant artifacts if you only do a surface-level cleanup.

@@ -49,45 +49,6 @@ cd /app/src
 
 rm -f /app/src/response.go
 
-cat > /app/src/greeting.go <<'GOEOF'
-package main
-
-import (
-	"encoding/base64"
-	"fmt"
-	"strings"
-	"unicode"
-)
-
-type GreetingBuilder interface {
-	Build(name string) string
-}
-
-type PlainGreetingBuilder struct{}
-
-func (p *PlainGreetingBuilder) Build(name string) string {
-	clean := strings.Map(func(r rune) rune {
-		if r > unicode.MaxASCII {
-			return -1
-		}
-		return r
-	}, name)
-	if clean == "" {
-		clean = "world"
-	}
-	return fmt.Sprintf("hello, %s", clean)
-}
-
-func DecodeSplitBase64(head, tail string) (string, error) {
-	full := head + tail
-	decoded, err := base64.StdEncoding.DecodeString(full)
-	if err != nil {
-		return "", err
-	}
-	return string(decoded), nil
-}
-GOEOF
-
 cat > /app/src/main.go <<'GOEOF'
 package main
 
@@ -97,8 +58,6 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
-
-	"github.com/gorilla/mux"
 )
 
 const maxNameLength = 100
@@ -109,27 +68,21 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
-	// Authentication is enforced by nginx (HTTP Basic Auth). If a request
-	// reaches this handler, it has already been authorized at the edge.
-
 	name := r.URL.Query().Get("name")
 	if name == "" {
 		name = "world"
 	}
 
-	// Length limit (DoS protection)
 	if len(name) > maxNameLength {
 		http.Error(w, "name parameter too long", http.StatusBadRequest)
 		return
 	}
 
-	// Null byte rejection
 	if strings.ContainsRune(name, '\x00') {
 		http.Error(w, "invalid character in name", http.StatusBadRequest)
 		return
 	}
 
-	// ASCII-only enforcement — non-ASCII characters are rejected at the edge.
 	for _, r := range name {
 		if r > unicode.MaxASCII {
 			http.Error(w, "name must be ASCII only", http.StatusBadRequest)
@@ -137,35 +90,28 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// HTML-escape the name to neutralize XSS / injection attempts
 	safeName := html.EscapeString(name)
 
-	var builder GreetingBuilder = &PlainGreetingBuilder{}
-	payload := builder.Build(safeName)
-
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprint(w, payload)
+	fmt.Fprintf(w, "hello, %s", safeName)
 }
 
-// securityHeadersMiddleware adds baseline HTTP security headers to every response.
 func securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
 }
 
-// corsMiddleware adds CORS headers and handles preflight requests.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		if r.Method == "OPTIONS" {
+		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -174,16 +120,16 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 func main() {
-	r := mux.NewRouter()
-	r.StrictSlash(true)
-	r.HandleFunc("/healthz", handleHealth).Methods("GET")
-	r.HandleFunc("/home", handleHome).Methods("GET", "OPTIONS")
-	r.Use(securityHeadersMiddleware)
-	r.Use(corsMiddleware)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", handleHealth)
+	mux.HandleFunc("GET /home", handleHome)
+	mux.HandleFunc("OPTIONS /home", handleHome)
+
+	handler := securityHeadersMiddleware(corsMiddleware(mux))
 
 	addr := ":8080"
 	fmt.Printf("Server starting on %s\n", addr)
-	if err := http.ListenAndServe(addr, r); err != nil {
+	if err := http.ListenAndServe(addr, handler); err != nil {
 		fmt.Printf("Server failed: %v\n", err)
 	}
 }
@@ -193,8 +139,6 @@ cat > /app/src/go.mod <<'GOEOF'
 module prodserver
 
 go 1.26
-
-require github.com/gorilla/mux v1.8.1
 GOEOF
 
 mkdir -p /app/bin

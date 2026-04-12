@@ -499,73 +499,6 @@ def test_wrong_basic_auth_rejected():
 
 # === Layer 4c: Code Quality (Go unit tests) ===
 
-RESPONSE_TEST_GO = r'''package main
-
-import (
-	"testing"
-	"unicode"
-)
-
-func TestPlainGreetingBuilder_Build(t *testing.T) {
-	var builder GreetingBuilder = &PlainGreetingBuilder{}
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"basic", "world", "hello, world"},
-		{"custom", "test", "hello, test"},
-		{"empty", "", "hello, world"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := builder.Build(tt.input)
-			if got != tt.expected {
-				t.Errorf("Build(%q) = %q, want %q", tt.input, got, tt.expected)
-			}
-		})
-	}
-}
-
-func TestPlainGreetingBuilder_ASCIIOnly(t *testing.T) {
-	var builder GreetingBuilder = &PlainGreetingBuilder{}
-	inputs := []string{
-		"world", "test", "Alice",
-		"wörld", "héllo", "日本", "Ω≈ç√", "naïve", "emoji\U0001F600",
-	}
-	for _, input := range inputs {
-		got := builder.Build(input)
-		for _, r := range got {
-			if r > unicode.MaxASCII {
-				t.Errorf("non-ASCII rune %q in Build(%q) = %q", r, input, got)
-				break
-			}
-		}
-	}
-}
-
-func TestDecodeSplitBase64(t *testing.T) {
-	// "hello, world" in base64 is "aGVsbG8sIHdvcmxk"
-	// Split as head="aGVsbG8sIHdvcmx" + tail="k"
-	result, err := DecodeSplitBase64("aGVsbG8sIHdvcmx", "k")
-	if err != nil {
-		t.Fatalf("DecodeSplitBase64 error: %v", err)
-	}
-	if result != "hello, world" {
-		t.Errorf("DecodeSplitBase64 got %q, want %q", result, "hello, world")
-	}
-}
-
-func TestDecodeSplitBase64Error(t *testing.T) {
-	_, err := DecodeSplitBase64("!!!invalid", "==")
-	if err == nil {
-		t.Error("DecodeSplitBase64 should return error for invalid base64")
-	}
-}
-'''
-
 HANDLER_TEST_GO = r'''package main
 
 import (
@@ -573,29 +506,25 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/gorilla/mux"
 )
 
-// buildRouter constructs the same router as main() so tests exercise
-// the full middleware chain (security headers, CORS, routing, handlers).
-func buildRouter() *mux.Router {
-	r := mux.NewRouter()
-	r.StrictSlash(true)
-	r.HandleFunc("/healthz", handleHealth).Methods("GET")
-	r.HandleFunc("/home", handleHome).Methods("GET", "OPTIONS")
-	r.Use(securityHeadersMiddleware)
-	r.Use(corsMiddleware)
-	return r
+// buildHandler wraps the app handlers with the same middleware chain
+// main uses, so tests exercise security headers, CORS, and routing.
+func buildHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", handleHealth)
+	mux.HandleFunc("GET /home", handleHome)
+	mux.HandleFunc("OPTIONS /home", handleHome)
+	return securityHeadersMiddleware(corsMiddleware(mux))
 }
 
 // doRequest drives the Go handler directly. The Go app does not perform
-// authentication (that's nginx's job), so tests call handlers without creds.
+// authentication (nginx handles that at the edge), so tests call handlers without creds.
 func doRequest(t *testing.T, method, url string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, url, nil)
 	w := httptest.NewRecorder()
-	buildRouter().ServeHTTP(w, req)
+	buildHandler().ServeHTTP(w, req)
 	return w
 }
 
@@ -686,24 +615,6 @@ func TestMethodNotAllowed(t *testing.T) {
 '''
 
 
-def test_go_unit_tests_response():
-    """greeting.go must pass unit tests (PlainGreetingBuilder.Build, DecodeSplitBase64, ASCII-only)."""
-    ssh_cmd("rm -f /app/src/greeting_test.go /app/src/response_test.go")
-    inject_cmd = f"cat > /app/src/greeting_test.go << 'TESTEOF'\n{RESPONSE_TEST_GO}\nTESTEOF"
-    run_cmd(
-        f"ssh -o StrictHostKeyChecking=no prod-svr bash -c '{inject_cmd}'",
-        timeout=15,
-    )
-
-    result = ssh_cmd("cd /app/src && go test -run 'TestPlainGreetingBuilder|TestDecodeSplitBase64' -v -count=1 2>&1", timeout=60)
-    assert result.returncode == 0, (
-        f"Go unit tests for greeting.go failed:\n{result.stdout}"
-    )
-    assert "FAIL" not in result.stdout, (
-        f"Go unit tests for greeting.go had failures:\n{result.stdout}"
-    )
-
-
 def test_go_unit_tests_handlers():
     """main.go handlers must pass httptest unit tests."""
     ssh_cmd("rm -f /app/src/handler_test.go")
@@ -713,7 +624,7 @@ def test_go_unit_tests_handlers():
         timeout=15,
     )
 
-    result = ssh_cmd("cd /app/src && go test -run 'TestHealthz|TestHome' -v -count=1 2>&1", timeout=60)
+    result = ssh_cmd("cd /app/src && go test -run 'TestHealthz|TestHome|TestSecurity|TestInput|TestMethod' -v -count=1 2>&1", timeout=60)
     assert result.returncode == 0, (
         f"Go handler tests failed:\n{result.stdout}"
     )
@@ -722,18 +633,7 @@ def test_go_unit_tests_handlers():
     )
 
 
-# === Layer 4c: Dependency Check ===
-
-
-def test_gorilla_mux_used():
-    """go.mod must include gorilla/mux dependency."""
-    result = ssh_cmd("cat /app/src/go.mod")
-    assert "gorilla/mux" in result.stdout, (
-        "gorilla/mux not found in go.mod — still using default net/http mux"
-    )
-
-
-# === Layer 4d: Security ===
+# === Layer 4c: Security ===
 
 
 def test_app_not_running_as_root():

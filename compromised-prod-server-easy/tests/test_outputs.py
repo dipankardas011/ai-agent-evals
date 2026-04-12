@@ -458,20 +458,9 @@ import (
 // not impose any specific router dependency on the agent.
 func buildHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		handleHealth(w, r)
-	})
-	mux.HandleFunc("/home", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodOptions {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		handleHome(w, r)
-	})
+	mux.HandleFunc("GET /healthz", handleHealth)
+	mux.HandleFunc("GET /home", handleHome)
+	mux.HandleFunc("OPTIONS /home", handleHome)
 	return securityHeadersMiddleware(corsMiddleware(mux))
 }
 
