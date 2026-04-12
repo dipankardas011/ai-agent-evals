@@ -35,6 +35,7 @@ Your team's jumphost has been compromised. An attacker got SSH access, tampered 
 - Routes:
   - `GET /healthz` → 200 `ok`
   - `GET /home?name=<value>` → 200, body exactly `hello, <name>` (default name is `world`)
+  - Make sure to handle `OPTIONS` methods as well.
 - Response body must be pure ASCII. No multi-byte bytes.
 - You may use the standard library `net/http` (or any router you like).
 - `main.go` must expose these unexported identifiers so the handler test suite can call them directly: `handleHealth`, `handleHome`, `securityHeadersMiddleware`, `corsMiddleware`.

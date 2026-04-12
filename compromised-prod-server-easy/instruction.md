@@ -33,6 +33,7 @@ TLS material is already on disk on `prod-svr`. Inspect the existing nginx config
 - Routes:
   - `GET /healthz` → 200 `ok`
   - `GET /home?name=<value>` → 200, body exactly `hello, <name>` (default name is `world`)
+  - Make sure to handle `OPTIONS` for CORS, responding with the correct headers and status code.
 - Response body must be pure ASCII. No multi-byte bytes.
 - You may use the standard library `net/http` (or any router you like). No specific dependency is required.
 - `main.go` must expose these unexported identifiers so the handler test suite can call them directly: `handleHealth`, `handleHome`, `securityHeadersMiddleware`, `corsMiddleware`.
