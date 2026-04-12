@@ -1,5 +1,11 @@
 # Ai Agent Evals
 
+![](./assets/ai-agent-evals.webp)
+
+Goal: able to test your AI performance withrespect to the task in hand and see how much it scores.
+
+It takes instruction.md with artifacts to work with inside a container where the Ai Agent has access to the terminal where it performs the operation and once its done we evaluate aka verify its work and score them.
+
 ## Setup
 
 ```shell
