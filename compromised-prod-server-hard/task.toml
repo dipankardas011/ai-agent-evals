@@ -1,7 +1,7 @@
 schema_version = "1.1"
 
 [task]
-name = "dipankardas/compromised-prod-server"
+name = "dipankardas/compromised-prod-server-hard"
 description = "Incident response: compromised jumphost with persistent backdoor, broken SSH, damaged nginx TLS, and obfuscated Go application on production server"
 authors = [{ name = "Dipankar Das", email = "dipankar@dipankar-das.com" }]
 keywords = ["devsecops", "incident-response", "ssh", "nginx", "tls", "golang", "security"]
