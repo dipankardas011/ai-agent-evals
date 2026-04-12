@@ -163,11 +163,11 @@ TRIAL: compromised-prod-server-hard__8tBwgNY
     E        +    where <built-in method strip of str object at 0xb3b3f0> = ''.strip
     E        +      where '' = CompletedProcess(args='ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 prod-svr "pgrep -u appuser prodserver"', r...ed, please try again.\nPermission denied, please try again.\nroot@prod-svr: Permission denied (publickey,password).\n').stdout
 ```
-</details>
 
 Here is the terminal actions it took
 ![](./assets/compromised-prod-server-hard-best.gif)
 
+</details>
 
 ### 2. Compromised Prod Server (Easy)
 
