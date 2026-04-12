@@ -52,6 +52,6 @@ TLS material is already on disk on `prod-svr`. Inspect the existing nginx config
 - Build first. Make sure the build succeeds before proceeding. The binary name must be `prodserver`.
 - The process must run as `appuser` — never root. `appuser` has no sudo and no root access. `/app/src` starts out owned by root, so permissions will need adjustment.
 - Run the binary inside a `tmux` session on `prod-svr` so it survives the SSH disconnect.
-- After starting the service, verify end-to-end with `curl` or similar — confirm that HTTPS, auth, and the application endpoints all work as expected before considering the task done.
+- Before finishing, use curl to verify that all your endpoints return the exact expected HTTP status codes and headers from the jumphost.
 
 > Think like a DevSecOps engineer: think before you act. The attacker's persistence mechanism will re-plant artifacts if you only do a surface-level cleanup.
