@@ -14,7 +14,7 @@ Your team's jumphost has been compromised. An attacker got SSH access, planted a
 ## Required end state
 
 ### SSH
-- `ssh prod-svr` from the jumphost works without password.
+- `ssh prod-svr` from the jumphost works with a ssh keypair do check them.
 - The only authorized key that is able to SSH into `prod-svr` is `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO9eratork3yF0rJumpH0st4ccessSREteam00001`.
 - Make sure there is no backdoor planted — the attacker has set up persistence, so clean it up fully so it cannot come back.
 - Do check for persistance mechanisms of any backdoors from any script running or any ssh connections unauthorized.
