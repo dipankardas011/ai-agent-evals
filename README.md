@@ -30,10 +30,26 @@ export OPENAI_API_BASE="http://192.168.1.18:8000/v1"
 export OPENAI_API_KEY="local-dummy-key"
 harbor run -p "./compromised-prod-server-easy" \
     --agent terminus-2 \
-    --model custom_openai/Qwen3.5-9B-Q5_K_M.gguf \
+    --model custom_openai/Qwen3.5-9B-Q5_K_M \
     --ak 'model_info:dict={"max_input_tokens": 131072, "max_output_tokens": 131072}' -k 2
 ```
 > How I got this model for that checkout [my blog](https://dipankar-das.com/blog/i-went-deep-localllm/)
+
+## How to run it.
+
+```shell
+
+# If using custom local model do use `custom_openai/<model-name>` and set the OPENAI_API_BASE and OPENAI_API_KEY accordingly
+
+harbor run -p "./compromised-prod-server-easy" --agent terminus-2 \
+    --model custom_openai/Qwen3.5-9B-Q5_K_M \
+    --ak 'model_info:dict={"max_input_tokens": 131072, "max_output_tokens": 131072}' -k 10 -n 10
+
+# at the end you get the job result location copy that
+
+./job-results.sh jobs/2026-04-24__19-42-40/result.json
+# this will give you detailed report of what it was not able to do.
+```
 
 ## Tests
 
