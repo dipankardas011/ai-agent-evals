@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Agent Evals — Benchmark Your AI on Real-World Tasks</title>
+  <meta name="description" content="Open-source framework to benchmark AI agents on real-world tasks. Containerized evaluation, automated scoring, 15-minute time limit. DevOps, security, and more.">
+  <meta property="og:title" content="AI Agent Evals">
+  <meta property="og:description" content="Does your AI agent actually work? Benchmark it on real tasks and find out.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://ai-benchmark.dipankar-das.com">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --bg-surface: #111118;
+      --bg-elevated: #1a1a24;
+      --border: #2a2a3a;
+      --text: #e0e0e8;
+      --text-dim: #7a7a8e;
+      --text-muted: #4a4a5e;
+      --green: #00ff88;
+      --green-dim: #00cc6a;
+      --green-glow: rgba(0, 255, 136, 0.15);
+      --red: #ff4466;
+      --red-dim: #cc3355;
+      --amber: #ffaa22;
+      --cyan: #22ddff;
+      --mono: 'JetBrains Mono', monospace;
+      --sans: 'Outfit', sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) var(--bg);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* Scanline overlay */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.03) 2px,
+        rgba(0, 0, 0, 0.03) 4px
+      );
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* Noise texture */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      opacity: 0.025;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 9998;
+    }
+
+    a { color: var(--green); text-decoration: none; transition: color 0.2s; }
+    a:hover { color: var(--cyan); }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ─── NAV ─── */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(10, 10, 15, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    nav .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 60px;
+    }
+
+    .nav-logo {
+      font-family: var(--mono);
+      font-weight: 700;
+      font-size: 1rem;
+      color: var(--green);
+      letter-spacing: -0.5px;
+    }
+
+    .nav-logo span { color: var(--text-dim); }
+
+    .nav-links {
+      display: flex;
+      gap: 28px;
+      list-style: none;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+    }
+
+    .nav-links a {
+      color: var(--text-dim);
+      transition: color 0.2s;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .nav-links a:hover { color: var(--green); }
+
+    /* ─── HERO ─── */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      position: relative;
+      padding: 100px 0 60px;
+    }
+
+    .hero-grid-bg {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 60px 60px;
+      opacity: 0.15;
+      mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 20%, transparent 70%);
+    }
+
+    .hero-glow {
+      position: absolute;
+      width: 600px;
+      height: 600px;
+      border-radius: 50%;
+      background: radial-gradient(circle, var(--green-glow) 0%, transparent 70%);
+      top: 10%;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: 6px 16px;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      margin-bottom: 32px;
+      animation: fadeInUp 0.6s ease both;
+    }
+
+    .hero-badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--green-glow); }
+      50% { opacity: 0.6; box-shadow: 0 0 0 6px transparent; }
+    }
+
+    .hero h1 {
+      font-family: var(--sans);
+      font-size: clamp(2.8rem, 6vw, 4.5rem);
+      font-weight: 900;
+      line-height: 1.05;
+      letter-spacing: -2px;
+      margin-bottom: 24px;
+      animation: fadeInUp 0.6s ease 0.1s both;
+    }
+
+    .hero h1 .accent { color: var(--green); }
+    .hero h1 .dim { color: var(--text-dim); }
+
+    .hero-sub {
+      font-size: 1.15rem;
+      color: var(--text-dim);
+      max-width: 560px;
+      line-height: 1.7;
+      margin-bottom: 40px;
+      animation: fadeInUp 0.6s ease 0.2s both;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      animation: fadeInUp 0.6s ease 0.3s both;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 28px;
+      border-radius: 8px;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.25s;
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--green);
+      color: var(--bg);
+    }
+
+    .btn-primary:hover {
+      background: #00ffaa;
+      box-shadow: 0 0 30px var(--green-glow);
+      transform: translateY(-1px);
+      color: var(--bg);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover {
+      border-color: var(--text-dim);
+      color: var(--text);
+    }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ─── TERMINAL DEMO ─── */
+    .terminal-section {
+      padding: 40px 0 100px;
+    }
+
+    .terminal {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      max-width: 800px;
+      margin: 0 auto;
+      animation: fadeInUp 0.6s ease 0.4s both;
+    }
+
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .terminal-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .terminal-dot:nth-child(1) { background: #ff5f56; }
+    .terminal-dot:nth-child(2) { background: #ffbd2e; }
+    .terminal-dot:nth-child(3) { background: #27c93f; }
+
+    .terminal-title {
+      flex: 1;
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    .terminal-body {
+      padding: 20px 24px;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      line-height: 1.8;
+      overflow-x: auto;
+    }
+
+    .terminal-body .prompt { color: var(--green); }
+    .terminal-body .cmd { color: var(--text); }
+    .terminal-body .comment { color: var(--text-muted); }
+    .terminal-body .output { color: var(--text-dim); }
+    .terminal-body .pass { color: var(--green); }
+    .terminal-body .fail { color: var(--red); }
+    .terminal-body .warn { color: var(--amber); }
+
+    /* ─── HOW IT WORKS ─── */
+    .section {
+      padding: 100px 0;
+    }
+
+    .section-label {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      color: var(--green-dim);
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      font-weight: 800;
+      letter-spacing: -1px;
+      margin-bottom: 60px;
+      line-height: 1.15;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+    }
+
+    .step {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px 28px;
+      position: relative;
+      transition: border-color 0.3s, box-shadow 0.3s;
+    }
+
+    .step:hover {
+      border-color: var(--green-dim);
+      box-shadow: 0 0 40px rgba(0, 255, 136, 0.05);
+    }
+
+    .step-num {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--green);
+      background: rgba(0, 255, 136, 0.08);
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-weight: 700;
+    }
+
+    .step h3 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+      letter-spacing: -0.3px;
+    }
+
+    .step p {
+      font-size: 0.9rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    /* ─── CHALLENGES ─── */
+    .challenges-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 24px;
+    }
+
+    .challenge-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      transition: border-color 0.3s, transform 0.3s;
+    }
+
+    .challenge-card:hover {
+      border-color: var(--green-dim);
+      transform: translateY(-2px);
+    }
+
+    .challenge-header {
+      padding: 28px 28px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .challenge-difficulty {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .difficulty-easy {
+      background: rgba(0, 255, 136, 0.1);
+      color: var(--green);
+      border: 1px solid rgba(0, 255, 136, 0.2);
+    }
+
+    .difficulty-hard {
+      background: rgba(255, 68, 102, 0.1);
+      color: var(--red);
+      border: 1px solid rgba(255, 68, 102, 0.2);
+    }
+
+    .challenge-body {
+      padding: 20px 28px 28px;
+    }
+
+    .challenge-body h3 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+      letter-spacing: -0.3px;
+    }
+
+    .challenge-body p {
+      font-size: 0.88rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+
+    .challenge-stats {
+      display: flex;
+      gap: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .stat {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .stat-value {
+      font-family: var(--mono);
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .stat-label {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    /* ─── RESULTS TABLE ─── */
+    .results-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--bg-surface);
+    }
+
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+    }
+
+    .results-table th {
+      text-align: left;
+      padding: 14px 20px;
+      background: var(--bg-elevated);
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .results-table td {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+
+    .results-table tr:last-child td { border-bottom: none; }
+
+    .results-table tr:hover td {
+      background: rgba(0, 255, 136, 0.02);
+    }
+
+    .score-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .score-bar-track {
+      flex: 1;
+      height: 6px;
+      background: var(--bg);
+      border-radius: 3px;
+      overflow: hidden;
+      min-width: 80px;
+    }
+
+    .score-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 1s ease;
+    }
+
+    .score-bar-fill.high { background: var(--green); }
+    .score-bar-fill.mid { background: var(--amber); }
+    .score-bar-fill.low { background: var(--red); }
+
+    .score-val { min-width: 45px; text-align: right; }
+    .score-val.high { color: var(--green); }
+    .score-val.mid { color: var(--amber); }
+    .score-val.low { color: var(--red); }
+
+    /* ─── ARCHITECTURE ─── */
+    .arch-diagram {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 40px;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      line-height: 1.6;
+      color: var(--text-dim);
+      white-space: pre;
+      overflow-x: auto;
+      text-align: center;
+    }
+
+    .arch-diagram .highlight { color: var(--green); }
+    .arch-diagram .dim { color: var(--text-muted); }
+
+    /* ─── CTA ─── */
+    .cta-section {
+      padding: 100px 0;
+      text-align: center;
+    }
+
+    .cta-section h2 {
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 900;
+      letter-spacing: -1.5px;
+      margin-bottom: 16px;
+    }
+
+    .cta-section p {
+      color: var(--text-dim);
+      font-size: 1.05rem;
+      margin-bottom: 36px;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .cta-actions {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    /* ─── FOOTER ─── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+    }
+
+    .footer-inner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .footer-text {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 20px;
+      list-style: none;
+    }
+
+    .footer-links a {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .footer-links a:hover { color: var(--green); }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 640px) {
+      .nav-links { gap: 16px; font-size: 0.7rem; }
+      .hero-actions { flex-direction: column; }
+      .btn { justify-content: center; }
+      .arch-diagram { font-size: 0.6rem; padding: 20px; }
+      .challenges-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ─── TYPING CURSOR ─── */
+    .cursor {
+      display: inline-block;
+      width: 8px;
+      height: 1.1em;
+      background: var(--green);
+      margin-left: 2px;
+      animation: blink 1s step-end infinite;
+      vertical-align: text-bottom;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    /* ─── SCROLL ANIMATIONS ─── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+  <nav>
+    <div class="container">
+      <a href="#" class="nav-logo">ai-agent-evals<span>/</span></a>
+      <ul class="nav-links">
+        <li><a href="#how">How</a></li>
+        <li><a href="#challenges">Challenges</a></li>
+        <li><a href="#results">Results</a></li>
+        <li><a href="https://github.com/dipankardas011/ai-agent-evals" target="_blank">GitHub</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-grid-bg"></div>
+    <div class="hero-glow"></div>
+    <div class="container hero-content">
+      <div class="hero-badge">
+        <span class="dot"></span>
+        Open Source
+      </div>
+      <h1>
+        Does your AI agent<br>
+        <span class="accent">actually work?</span><br>
+        <span class="dim">Prove it.</span>
+      </h1>
+      <p class="hero-sub">
+        Real-world tasks. Containerized environments. Automated scoring. No hand-holding. Give your agent 15 minutes and see what it can actually do — starting with DevOps, security, and beyond.
+      </p>
+      <div class="hero-actions">
+        <a href="https://github.com/dipankardas011/ai-agent-evals" class="btn btn-primary" target="_blank">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+          Get Started
+        </a>
+        <a href="#how" class="btn btn-ghost">See How It Works</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- TERMINAL DEMO -->
+  <section class="terminal-section">
+    <div class="container">
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <span class="terminal-title">harbor &mdash; ai-agent-evals</span>
+        </div>
+        <div class="terminal-body">
+          <span class="comment"># Run the evaluation</span><br>
+          <span class="prompt">$ </span><span class="cmd">harbor run -p "./compromised-prod-server-easy" --agent terminus-2 --model claude-opus-4-6 -k 1</span><br><br>
+          <span class="output">environment_setup&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 0:00:03</span><br>
+          <span class="output">agent_setup&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 0:00:53</span><br>
+          <span class="output">agent_execution&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 0:06:36</span><br>
+          <span class="output">verifier&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 0:01:30</span><br><br>
+          <span class="output">Tests: </span><span class="pass">26/30 passed</span><span class="output">, </span><span class="fail">4 failed</span><br><br>
+          <span class="pass">&nbsp; &#10003; test_ssh_access</span><br>
+          <span class="pass">&nbsp; &#10003; test_nginx_config_valid</span><br>
+          <span class="pass">&nbsp; &#10003; test_ssl_chain_valid</span><br>
+          <span class="pass">&nbsp; &#10003; test_basic_auth_works</span><br>
+          <span class="pass">&nbsp; &#10003; test_cors_headers</span><br>
+          <span class="pass">&nbsp; &#10003; test_security_header_hsts</span><br>
+          <span class="fail">&nbsp; &#10007; test_no_rogue_ssh_key</span><br>
+          <span class="fail">&nbsp; &#10007; test_no_backdoor_persistence</span><br>
+          <span class="output">&nbsp; ...</span><span class="cursor"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="section" id="how">
+    <div class="container">
+      <div class="section-label reveal">// process</div>
+      <h2 class="section-title reveal">How It Works</h2>
+      <div class="steps">
+        <div class="step reveal">
+          <div class="step-num">01</div>
+          <h3>Pick a Challenge</h3>
+          <p>Choose from real-world DevSecOps scenarios. Each ships with an instruction file, containerized environment, and automated verification tests.</p>
+        </div>
+        <div class="step reveal">
+          <div class="step-num">02</div>
+          <h3>Point Your Agent</h3>
+          <p>Run any AI agent&mdash;Claude, GPT, local models via Ollama, anything with an API. The agent gets terminal access inside a Docker container and reads the task.</p>
+        </div>
+        <div class="step reveal">
+          <div class="step-num">03</div>
+          <h3>Watch &amp; Score</h3>
+          <p>The agent has 15 minutes. Automated pytest verification runs after. Every test maps to a real security or operational requirement. No partial credit fudging.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CHALLENGES -->
+  <section class="section" id="challenges" style="padding-top: 0;">
+    <div class="container">
+      <div class="section-label reveal">// scenarios</div>
+      <h2 class="section-title reveal">Current Challenges</h2>
+      <div class="challenges-grid">
+        <div class="challenge-card reveal">
+          <div class="challenge-header">
+            <div></div>
+            <span class="challenge-difficulty difficulty-easy">Easy</span>
+          </div>
+          <div class="challenge-body">
+            <h3>Compromised Prod Server</h3>
+            <p>Jumphost breached. Attacker planted SSH backdoors with persistence, broke HTTPS stack. Agent must clean up, restore TLS, rewrite Go app, harden everything&mdash;from a terminal.</p>
+            <div class="challenge-stats">
+              <div class="stat">
+                <span class="stat-value">30</span>
+                <span class="stat-label">Tests</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value">15min</span>
+                <span class="stat-label">Time Limit</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value">SSH + TLS + Go</span>
+                <span class="stat-label">Domains</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="challenge-card reveal">
+          <div class="challenge-header">
+            <div></div>
+            <span class="challenge-difficulty difficulty-hard">Hard</span>
+          </div>
+          <div class="challenge-body">
+            <h3>Compromised Prod Server</h3>
+            <p>Same scenario, harder constraints. Obfuscated code, moved certificates, deeper persistence mechanisms. The attacker was more thorough&mdash;your agent needs to be too.</p>
+            <div class="challenge-stats">
+              <div class="stat">
+                <span class="stat-value">33</span>
+                <span class="stat-label">Tests</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value">15min</span>
+                <span class="stat-label">Time Limit</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value">SSH + TLS + Go + Recovery</span>
+                <span class="stat-label">Domains</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section class="section" style="padding-top: 0;">
+    <div class="container">
+      <div class="section-label reveal">// architecture</div>
+      <h2 class="section-title reveal">Evaluation Pipeline</h2>
+      <div class="arch-diagram reveal">
+<span class="dim">┌─────────────────────┐</span>       <span class="dim">┌───────────────────────────────────────┐</span>
+<span class="dim">│</span>  <span class="highlight">instruction.md</span>      <span class="dim">│</span>       <span class="dim">│</span>  <span class="highlight">Docker Container</span>                      <span class="dim">│</span>
+<span class="dim">│</span>  task definition     <span class="dim">│──────▶│</span>                                       <span class="dim">│</span>
+<span class="dim">│</span>  + artifacts         <span class="dim">│</span>       <span class="dim">│</span>  ┌──────────┐     ┌──────────────┐   <span class="dim">│</span>
+<span class="dim">└─────────────────────┘</span>       <span class="dim">│</span>  <span class="dim">│</span> <span class="highlight">AI Agent</span> <span class="dim">│────▶│</span> <span class="highlight">Terminal</span>      <span class="dim">│</span>   <span class="dim">│</span>
+                              <span class="dim">│</span>  <span class="dim">└──────────┘</span>     <span class="dim">└──────────────┘</span>   <span class="dim">│</span>
+<span class="dim">┌─────────────────────┐</span>       <span class="dim">│</span>                                       <span class="dim">│</span>
+<span class="dim">│</span>  <span class="highlight">pytest verifier</span>     <span class="dim">│◀──────│</span>  execution artifacts                  <span class="dim">│</span>
+<span class="dim">│</span>  automated scoring   <span class="dim">│</span>       <span class="dim">└───────────────────────────────────────┘</span>
+<span class="dim">└─────────┬───────────┘</span>
+          <span class="dim">│</span>
+          <span class="dim">▼</span>
+<span class="dim">┌─────────────────────┐</span>
+<span class="dim">│</span>  <span class="highlight">score + report</span>      <span class="dim">│</span>
+<span class="dim">│</span>  pass/fail per test  <span class="dim">│</span>
+<span class="dim">└─────────────────────┘</span></div>
+    </div>
+  </section>
+
+  <!-- RESULTS -->
+  <section class="section" id="results" style="padding-top: 0;">
+    <div class="container">
+      <div class="section-label reveal">// benchmarks</div>
+      <h2 class="section-title reveal">Sample Results</h2>
+      <p style="color: var(--text-dim); margin-bottom: 32px; font-size: 0.92rem;" class="reveal">
+        Real runs. Agent: <span style="font-family: var(--mono); color: var(--text);">terminus-2</span>. No cherry-picking.
+      </p>
+      <div class="results-table-wrap reveal">
+        <table class="results-table">
+          <thead>
+            <tr>
+              <th>Challenge</th>
+              <th>Model</th>
+              <th>Passed</th>
+              <th>Time</th>
+              <th>Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="color: var(--text);">Compromised Server (Easy)</td>
+              <td>claude-opus-4-6</td>
+              <td><span class="pass">26</span><span style="color: var(--text-muted);">/30</span></td>
+              <td>6m 36s</td>
+              <td>
+                <div class="score-bar">
+                  <div class="score-bar-track">
+                    <div class="score-bar-fill high" style="width: 87%;"></div>
+                  </div>
+                  <span class="score-val high">87%</span>
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style="color: var(--text);">Compromised Server (Easy)</td>
+              <td>claude-opus-4-6</td>
+              <td><span class="fail">8</span><span style="color: var(--text-muted);">/30</span></td>
+              <td>5m 28s</td>
+              <td>
+                <div class="score-bar">
+                  <div class="score-bar-track">
+                    <div class="score-bar-fill low" style="width: 27%;"></div>
+                  </div>
+                  <span class="score-val low">27%</span>
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style="color: var(--text);">Compromised Server (Hard)</td>
+              <td>claude-opus-4-6</td>
+              <td><span class="warn">22</span><span style="color: var(--text-muted);">/33</span></td>
+              <td>15m 00s</td>
+              <td>
+                <div class="score-bar">
+                  <div class="score-bar-track">
+                    <div class="score-bar-fill mid" style="width: 67%;"></div>
+                  </div>
+                  <span class="score-val mid">67%</span>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="color: var(--text-muted); margin-top: 16px; font-size: 0.78rem; font-family: var(--mono);" class="reveal">
+        * Same model, same agent, different runs. Variance is the point&mdash;consistency matters.
+      </p>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta-section">
+    <div class="container reveal">
+      <h2>Run your own eval.</h2>
+      <p>Clone the repo. Pick a model. Pick a task. See what your agent can actually do.</p>
+      <div class="cta-actions">
+        <a href="https://github.com/dipankardas011/ai-agent-evals" class="btn btn-primary" target="_blank">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+          View on GitHub
+        </a>
+        <a href="https://dipankar-das.com/blog/i-went-deep-localllm/" class="btn btn-ghost" target="_blank">Read the Blog Post</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="container footer-inner">
+      <span class="footer-text">ai-agent-evals &copy; 2026 Dipankar Das</span>
+      <ul class="footer-links">
+        <li><a href="https://github.com/dipankardas011/ai-agent-evals" target="_blank">GitHub</a></li>
+        <li><a href="https://dipankar-das.com" target="_blank">dipankar-das.com</a></li>
+      </ul>
+    </div>
+  </footer>
+
+  <script>
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry, i) => {
+        if (entry.isIntersecting) {
+          setTimeout(() => entry.target.classList.add('visible'), i * 80);
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.15 });
+
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+  </script>
+
+</body>
+</html>
